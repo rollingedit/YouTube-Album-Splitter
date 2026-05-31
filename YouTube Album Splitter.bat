@@ -43,6 +43,7 @@ function Ensure-Command {
 function Invoke-YtDlpDownload {
     $ytDlpArgs = @(
         "--force-overwrites",
+        "--no-playlist",
         "--remote-components", "ejs:github",
         "-P", $OutDir,
         "-f", "ba[acodec^=opus]/ba",
@@ -94,6 +95,43 @@ function Invoke-YtDlpDownload {
     }
 }
 
+function Get-SafeName {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $safe = $Name -replace '[<>:"/\\|?*]', ''
+    $safe = $safe -replace '\s+', ' '
+    $safe = $safe.Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "Unknown Album"
+    }
+    return $safe
+}
+
+function Get-AlbumInfoFromTitle {
+    param([Parameter(Mandatory = $true)][string]$Title)
+
+    $clean = $Title
+    $clean = $clean -replace '\s*\[[^\]]*?\]\s*$', ''
+    $clean = $clean -replace '\s*-\s*(?:full album|full ep|full lp|album|ep)\s*(?:\d{4})?\s*$',''
+    $clean = $clean -replace '\s*\([^)]*?(?:instrumental|official|audio|remaster|remastered)[^)]*?\)\s*', ' '
+    $clean = $clean -replace '\s*-\s*(?:instrumental only|instrumental|official audio|audio|remaster|remastered)\s*(?:\d{4})?\s*$',''
+    $clean = $clean -replace '\s+', ' '
+    $clean = $clean.Trim()
+
+    $artist = ""
+    $album = $clean
+
+    if ($clean -match '^\s*(?<artist>.+?)\s+-\s+(?<album>.+?)\s*$') {
+        $artist = $Matches.artist.Trim()
+        $album = $Matches.album.Trim()
+    }
+
+    [pscustomobject]@{
+        Artist = $artist
+        Album = $album
+    }
+}
+
 Write-Host ""
 Write-Host "YouTube Album Splitter"
 Write-Host ""
@@ -132,6 +170,33 @@ while ($true) {
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
+    $AlbumArtist = ""
+    $AlbumTitle = ""
+    if ($FullOpus) {
+        $VideoTitle = $FullOpus.BaseName -replace '\s*\[[^\]]+\]$', ''
+        $AlbumInfo = Get-AlbumInfoFromTitle -Title $VideoTitle
+        $AlbumArtist = $AlbumInfo.Artist
+        $AlbumTitle = $AlbumInfo.Album
+
+        $FolderName = if ($AlbumArtist) {
+            Get-SafeName "$AlbumArtist - $AlbumTitle"
+        } else {
+            Get-SafeName $AlbumTitle
+        }
+
+        $AlbumDir = Join-Path $DownloadsRoot $FolderName
+        if (Test-Path -LiteralPath $AlbumDir) {
+            $AlbumDir = Join-Path $DownloadsRoot ("$FolderName " + (Get-Date -Format "yyyy-MM-dd HH-mm-ss"))
+        }
+
+        Move-Item -LiteralPath $OutDir -Destination $AlbumDir
+        $OutDir = $AlbumDir
+        $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+            Where-Object { $_.Name -notmatch '^\d+\. ' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+    }
+
     $Cover = Join-Path $OutDir "cover.jpg"
     if ($FullOpus) {
         cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
@@ -162,6 +227,8 @@ from mutagen.oggopus import OggOpus
 
 chapter_dir = Path(sys.argv[1])
 cover_path = Path(sys.argv[2])
+album_title = sys.argv[3] if len(sys.argv) > 3 else ""
+album_artist = sys.argv[4] if len(sys.argv) > 4 else ""
 chapter_re = re.compile(r"^(?P<number>\d+)\.\s*(?P<title>.+)\.opus$", re.IGNORECASE)
 
 cover_tag = None
@@ -180,18 +247,23 @@ for path in sorted(chapter_dir.glob("*.opus")):
 
     number = str(int(match.group("number")))
     song = match.group("title").strip()
-    title = f"{number}. {song}"
+    filename_title = f"{number}. {song}"
 
     audio = OggOpus(path)
-    audio["title"] = [title]
+    audio["title"] = [song]
     audio["tracknumber"] = [number]
+    if album_title:
+        audio["album"] = [album_title]
+    if album_artist:
+        audio["albumartist"] = [album_artist]
+        audio["artist"] = [album_artist]
     audio.pop("track", None)
     audio.pop("genre", None)
     if cover_tag:
         audio["metadata_block_picture"] = [cover_tag]
     audio.save()
 
-    clean_name = f"{title}.opus"
+    clean_name = f"{filename_title}.opus"
     clean_path = path.with_name(clean_name)
     if clean_path != path:
         if clean_path.exists():
@@ -203,7 +275,7 @@ for path in sorted(chapter_dir.glob("*.opus")):
 
     Write-Host ""
     Write-Host "Fixing album art and tags..."
-    py -3 "$TagScript" "$OutDir" "$Cover"
+    py -3 "$TagScript" "$OutDir" "$Cover" "$AlbumTitle" "$AlbumArtist"
 
     if (Test-Path -LiteralPath $Cover) {
         Remove-Item -LiteralPath $Cover -Force
