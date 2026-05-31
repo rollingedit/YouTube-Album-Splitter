@@ -59,8 +59,19 @@ function Invoke-YtDlpDownload {
         $Url
     )
 
-    & yt-dlp @ytDlpArgs
+    $firstOutput = & yt-dlp @ytDlpArgs 2>&1
+    $firstOutput | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -eq 0) {
+        $script:DownloadSucceeded = $true
+        return
+    }
+
+    $firstText = $firstOutput -join "`n"
+    if ($firstText -match 'is not a valid URL|Unsupported URL|no such option|Invalid URL') {
+        Write-Host ""
+        Write-Host "That does not look like a valid YouTube video link."
+        Write-Host "Copy the full link from YouTube and try again."
+        $script:DownloadSucceeded = $false
         return
     }
 
@@ -78,7 +89,8 @@ function Invoke-YtDlpDownload {
 
     Refresh-Path
 
-    & yt-dlp @ytDlpArgs
+    $retryOutput = & yt-dlp @ytDlpArgs 2>&1
+    $retryOutput | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "Still couldn't download after updating the tools."
@@ -90,9 +102,11 @@ function Invoke-YtDlpDownload {
         Write-Host ""
         Write-Host "Double-check the link and try again."
         Write-Host ""
-        Read-Host "Press Enter to close"
-        exit 1
+        $script:DownloadSucceeded = $false
+        return
     }
+
+    $script:DownloadSucceeded = $true
 }
 
 function Get-SafeName {
@@ -157,15 +171,32 @@ while ($true) {
         break
     }
 
-    $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
-    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    if ($Url -notmatch '^https?://(www\.)?(youtube\.com|youtu\.be)/') {
+        Write-Host ""
+        Write-Host "That does not look like a YouTube link."
+        Write-Host "Copy the full YouTube video link and try again."
+        continue
+    }
 
-    Write-Host ""
-    Write-Host "Downloading and splitting songs..."
+    try {
+        $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
+        New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-    Invoke-YtDlpDownload
+        Write-Host ""
+        Write-Host "Downloading and splitting songs..."
 
-    $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        $script:DownloadSucceeded = $false
+        Invoke-YtDlpDownload
+        if (-not $script:DownloadSucceeded) {
+            if ((Test-Path -LiteralPath $OutDir) -and -not (Get-ChildItem -LiteralPath $OutDir -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $OutDir -Force
+            }
+            Write-Host ""
+            Write-Host "Paste another link to try again, or press Enter with no link to close."
+            continue
+        }
+
+        $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
         Where-Object { $_.Name -notmatch '^\d+\. ' } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
@@ -302,4 +333,12 @@ for path in sorted(chapter_dir.glob("*.opus")):
         Write-Host "This video did not create separate songs, so the full audio file was kept."
     }
     Write-Host ""
+    } catch {
+        Write-Host ""
+        Write-Host "Something went wrong while processing that link."
+        Write-Host $_.Exception.Message
+        Write-Host ""
+        Write-Host "Paste another link to try again, or press Enter with no link to close."
+        Write-Host ""
+    }
 }
