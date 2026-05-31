@@ -2,7 +2,7 @@
 
 Split a YouTube album video into separate song files automatically.
 
-Paste a YouTube link, and this tool downloads the audio, splits it by the video's chapter timestamps, adds album art, fixes track numbers, and saves clean individual Opus files like:
+Paste a YouTube link, and this tool downloads the audio, splits it by the video's YouTube song markers, adds album art, fixes track numbers, and saves clean individual Opus files like:
 
 ```text
 1. Song Name.opus
@@ -23,12 +23,15 @@ No command-line knowledge is needed. After you double-click the file and paste t
 3. Double-click it.
 4. Paste the YouTube video link when it asks.
 5. Press Enter.
+6. Paste another link to split another album, or press Enter with no link to close.
 
 Finished songs appear in a folder named:
 
 ```text
-downloaded chapters
+YouTube Album Splitter Songs
 ```
+
+Each pasted link gets its own dated subfolder inside that folder, so albums do not mix together.
 
 ## Features
 
@@ -79,7 +82,7 @@ If the retry still fails, the tool shows a plain-language message with common ca
 
 ## Output Details
 
-Each successful chapter track is cleaned up like this:
+Each successful song file is cleaned up like this:
 
 ```text
 Filename:      1. Song Name.opus
