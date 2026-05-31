@@ -1,8 +1,8 @@
 # YouTube Album Splitter
 
-Split a YouTube album video into separate song files automatically.
+Split your own chaptered YouTube audio upload into separate song files automatically.
 
-Paste a YouTube link, and this tool downloads the audio, splits it by the video's YouTube song markers, adds album art, fixes track numbers, and saves clean individual Opus files like:
+Paste a YouTube link you own or have permission to use, and this tool downloads the audio, splits it by the video's YouTube song markers, adds album art, fixes track numbers, and saves clean individual Opus files like:
 
 ```text
 1. Song Name.opus
@@ -23,7 +23,7 @@ No command-line knowledge is needed. After you double-click the file and paste t
 3. Double-click it.
 4. Paste the YouTube video link when it asks.
 5. Press Enter.
-6. Paste another link to split another album, or press Enter with no link to close.
+6. Paste another link to process another upload, or press Enter with no link to close.
 
 Finished songs appear in a folder named:
 
@@ -31,18 +31,21 @@ Finished songs appear in a folder named:
 YouTube Album Splitter Songs
 ```
 
-Each pasted link gets its own dated subfolder inside that folder, so albums do not mix together.
+Each pasted link gets its own subfolder inside that folder, so uploads do not mix together.
 
 ## Features
 
 - One-file Windows tool. No separate installer or setup script.
 - Prompts for a YouTube link instead of making users edit commands.
+- Treats each pasted link as one video, even if the URL includes a playlist.
 - Downloads the best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers.
 - Creates clean numbered filenames like `1. Song Name.opus`.
+- Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Embeds album art into every split song file.
 - Crops album art to a centered 1:1 square so music apps display it cleanly.
-- Sets each title tag to match the filename, like `1. Song Name`.
+- Sets each title tag to the clean song name, like `Song Name`.
+- Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
 - Sets each track number tag to the correct number, like `1`.
 - Removes genre metadata so files are not mislabeled.
 - Deletes temporary files after the final tracks are finished.
@@ -76,7 +79,7 @@ This update step is not guaranteed to fix every failure. It is there because out
 If the retry still fails, the tool shows a plain-language message with common causes, such as:
 
 - Private, deleted, age-restricted, or region-locked video.
-- Playlist or channel link instead of a single video.
+- Playlist or channel link without a specific video selected.
 - Blocked or unstable internet connection.
 - A new YouTube change that needs a future yt-dlp update.
 
@@ -85,14 +88,34 @@ If the retry still fails, the tool shows a plain-language message with common ca
 Each successful song file is cleaned up like this:
 
 ```text
+Folder:        Artist - Album
 Filename:      1. Song Name.opus
-Title tag:     1. Song Name
+Title tag:     Song Name
+Artist tag:    Artist
+Album tag:     Album
 Track number:  1
 Album art:     Embedded
 Genre:         Removed
 ```
 
-The final output folder is kept simple for nontechnical users. After a successful split, it contains only the finished song files.
+The final output folder is kept simple for nontechnical users. After a successful split, each output folder contains only the finished song files.
+
+Artist and album naming is based on the YouTube title. It works best when titles look like:
+
+```text
+Artist - Album (Instrumental) - Full Album 2024
+Artist - Album (Instrumental Only) - Full EP 2024
+```
+
+For example, `Example Artist - Example Album (Instrumental) - Full Album 2024` becomes:
+
+```text
+Artist: Example Artist
+Album:  Example Album
+Folder: Example Artist - Example Album
+```
+
+If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic.
 
 Album art is forced to a square thumbnail. If the original thumbnail is already square, the crop does not change it. If it is wide or tall, the tool crops the center so the final cover art is 1:1.
 
@@ -110,7 +133,7 @@ Most Windows 10 and Windows 11 computers already include `winget`. If yours does
 
 This works best with YouTube videos that show chapter markers on the progress bar. If a video has no chapters, the tool keeps the full audio file instead of leaving an empty folder.
 
-Use this only for content you own or have permission to download.
+Use this only for content you own, created, or have permission to download and process.
 
 Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is a normal Windows security limitation for small unsigned projects, not proof that something is wrong. If you trust the file, click **More info** then **Run anyway**.
 
@@ -119,5 +142,3 @@ Windows may show a SmartScreen or antivirus warning because this is an unsigned 
 This project is licensed under the GNU General Public License v3.0.
 
 That means people can use, share, and modify it, but if they distribute modified versions, they must keep the same license and share the source code too.
-
-When publishing this on GitHub, add a `LICENSE` file using GitHub's **GNU General Public License v3.0** template so the license is recognized properly.
