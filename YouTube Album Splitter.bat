@@ -1,150 +1,361 @@
-# YouTube Album Splitter
+@echo off
+set "BAT_PATH=%~f0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:BAT_PATH; $c=Get-Content -LiteralPath $p -Raw; $m='# POWERSHELL_' + 'PAYLOAD'; $parts=$c -split [regex]::Escape($m),2; Invoke-Expression $parts[1]"
+exit /b %ERRORLEVEL%
 
-Split your own chaptered YouTube audio upload into separate song files automatically.
+# POWERSHELL_PAYLOAD
+$ErrorActionPreference = "Stop"
 
-Paste a YouTube link you own or have permission to use, and this tool downloads the audio, splits it by the video's YouTube song markers, adds album art, fixes track numbers, and saves clean individual Opus files like:
+function Refresh-Path {
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machinePath;$userPath"
+}
 
-```text
-1. Song Name.opus
-2. Song Name.opus
-3. Song Name.opus
-```
+function Ensure-Command {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string]$WingetId,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
 
-It is designed for album-style YouTube uploads that show chapter markers on the YouTube progress bar.
+    Refresh-Path
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        Write-Host "$Name found."
+        return
+    }
 
-Many videos create those chapters from timestamps in the description, but timestamps alone are not always enough. If YouTube does not show chapter markers on the progress bar, the tool may keep the full audio file instead of splitting it.
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Windows App Installer / winget is missing. Install 'App Installer' from the Microsoft Store, then run this again."
+    }
 
-No command-line knowledge is needed. After you double-click the file and paste the link, the tool handles the rest. When it finishes, you can paste another link right away or press Enter with no link to close.
+    Write-Host "$Name not found. Installing it now..."
+    winget install --id $WingetId -e --accept-package-agreements --accept-source-agreements
+    Refresh-Path
 
-## How To Use
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        throw "$Name was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+    }
 
-1. Go to `Releases`
-2. Download `YouTube Album Splitter.bat`.
-3. Double-click it.
-4. Paste the YouTube video link when it asks.
-5. Press Enter.
-6. Paste another link to process another upload, or press Enter with no link to close.
+    Write-Host "$Name installed."
+}
 
-Finished songs appear in a folder named:
+function Invoke-YtDlpDownload {
+    $ytDlpArgs = @(
+        "--force-overwrites",
+        "--no-playlist",
+        "--remote-components", "ejs:github",
+        "-P", $OutDir,
+        "-f", "ba[acodec^=opus]/ba",
+        "-x",
+        "--audio-format", "opus",
+        "--split-chapters",
+        "--embed-metadata",
+        "--embed-thumbnail",
+        "--convert-thumbnails", "jpg",
+        "--ppa", "ThumbnailsConvertor+ffmpeg_o:-c:v mjpeg -vf crop=ih:ih",
+        "--ppa", "SplitChapters+ffmpeg_o:-vn",
+        "-o", "chapter:%(section_number)d. %(section_title)s.%(ext)s",
+        $Url
+    )
 
-```text
-YouTube Album Splitter Songs
-```
+    $firstOutput = & yt-dlp @ytDlpArgs 2>&1
+    $firstOutput | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -eq 0) {
+        $script:DownloadSucceeded = $true
+        return
+    }
 
-Each pasted link gets its own subfolder inside that folder, so uploads do not mix together.
+    $firstText = $firstOutput -join "`n"
+    if ($firstText -match 'is not a valid URL|Unsupported URL|no such option|Invalid URL') {
+        Write-Host ""
+        Write-Host "That does not look like a valid YouTube video link."
+        Write-Host "Copy the full link from YouTube and try again."
+        $script:DownloadSucceeded = $false
+        return
+    }
 
-## Features
+    Write-Host ""
+    Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+    winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
+    winget upgrade --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
+    winget upgrade --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
 
-- One-file Windows tool. No separate installer or setup script.
-- Prompts for a YouTube link instead of making users edit commands.
-- Lets you process multiple links in one session.
-- Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
-- Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
-- Treats each pasted link as one selected video, even if the URL includes a playlist.
-- Downloads the best available Opus audio.
-- Splits the video into separate song files using YouTube chapter markers.
-- Creates clean numbered filenames like `1. Song Name.opus`.
-- Creates an album folder from the YouTube title when it can, like `Artist - Album`.
-- Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
-- Embeds album art into every split song file.
-- Crops album art to a centered 1:1 square so music apps display it cleanly.
-- Sets each title tag to the clean song name, like `Song Name`.
-- Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
-- Sets each track number tag to the correct number, like `1`.
-- Removes genre metadata so files are not mislabeled.
-- Deletes temporary files after the final tracks are finished.
-- Keeps the full audio file only if the video has no chapters, so the output folder is never empty.
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
+        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
+        py -3 -m pip install --user --upgrade "yt-dlp[default]" curl-cffi
+    }
 
-## Automatic Setup
+    Refresh-Path
 
-The tool checks for the helper programs it needs and installs missing ones automatically with `winget`:
+    $retryOutput = & yt-dlp @ytDlpArgs 2>&1
+    $retryOutput | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "Still couldn't download after updating the tools."
+        Write-Host "Common causes:"
+        Write-Host "- The link is private, age-restricted, deleted, or region-locked."
+        Write-Host "- The link is a playlist/channel instead of one video."
+        Write-Host "- The internet connection is blocked or unstable."
+        Write-Host "- YouTube changed something and yt-dlp needs another update later."
+        Write-Host ""
+        Write-Host "Double-check the link and try again."
+        Write-Host ""
+        $script:DownloadSucceeded = $false
+        return
+    }
 
-- yt-dlp, for downloading from YouTube.
-- FFmpeg, for audio conversion, thumbnail handling, and cover extraction.
-- Deno, for modern YouTube JavaScript challenge solving used by yt-dlp.
-- Python, for final Opus metadata and album-art tagging.
+    $script:DownloadSucceeded = $true
+}
 
-It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
+function Get-SafeName {
+    param([Parameter(Mandatory = $true)][string]$Name)
 
-## Reliability Features
+    $safe = $Name -replace '[<>:"/\\|?*]', ''
+    $safe = $safe -replace '\s+', ' '
+    $safe = $safe.Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "Unknown Album"
+    }
+    return $safe
+}
 
-YouTube changes often, so the script includes a recovery path.
+function Get-AlbumInfoFromTitle {
+    param([Parameter(Mandatory = $true)][string]$Title)
 
-If the first download attempt fails, it automatically updates the main download tools and retries once:
+    $fallback = $Title
+    $fallback = $fallback -replace '\s*\[[^\]]+\]$', ''
+    $fallback = $fallback -replace '\s+', ' '
+    $fallback = $fallback.Trim()
+    if ([string]::IsNullOrWhiteSpace($fallback)) {
+        $fallback = $Title.Trim()
+    }
 
-- yt-dlp
-- FFmpeg
-- Deno
+    $clean = $Title
+    $clean = $clean -replace '\s*\[[^\]]*?\]\s*$', ''
+    $clean = $clean -replace '\s*-\s*(?:full album|full ep|full lp|album|ep)\s*(?:\d{4})?\s*$',''
+    $clean = $clean -replace '\s*\([^)]*?(?:instrumental|official|audio|remaster|remastered)[^)]*?\)\s*', ' '
+    $clean = $clean -replace '\s*-\s*(?:instrumental only|instrumental|official audio|audio|remaster|remastered)\s*(?:\d{4})?\s*$',''
+    $clean = $clean -replace '\s+', ' '
+    $clean = $clean.Trim()
 
-If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
+    if ([string]::IsNullOrWhiteSpace($clean)) {
+        $clean = $fallback
+    }
 
-This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that, but the tool will still give a readable message instead of silently failing.
+    $artist = ""
+    $album = $clean
 
-If the retry still fails, the tool shows a plain-language message with common causes, such as:
+    if ($clean -match '^\s*(?<artist>.+?)\s+-\s+(?<album>.+?)\s*$') {
+        $artist = $Matches.artist.Trim()
+        $album = $Matches.album.Trim()
+    }
 
-- Private, deleted, age-restricted, or region-locked video.
-- Playlist or channel link without a specific video selected.
-- Blocked or unstable internet connection.
-- A new YouTube change that needs a future yt-dlp update.
+    if ([string]::IsNullOrWhiteSpace($album)) {
+        $artist = ""
+        $album = $fallback
+    }
 
-## Output Details
+    [pscustomobject]@{
+        Artist = $artist
+        Album = $album
+    }
+}
 
-Each successful song file is cleaned up like this:
+Write-Host ""
+Write-Host "YouTube Album Splitter"
+Write-Host ""
 
-```text
-Folder:        Artist - Album
-Filename:      1. Song Name.opus
-Title tag:     Song Name
-Artist tag:    Artist
-Album tag:     Album
-Track number:  1
-Album art:     Embedded
-Genre:         Removed
-```
+Write-Host "Checking required tools..."
+Ensure-Command -Command "yt-dlp" -WingetId "yt-dlp.yt-dlp" -Name "yt-dlp"
+Ensure-Command -Command "ffmpeg" -WingetId "Gyan.FFmpeg" -Name "FFmpeg"
+Ensure-Command -Command "py" -WingetId "Python.Python.3.12" -Name "Python"
+Ensure-Command -Command "deno" -WingetId "DenoLand.Deno" -Name "Deno"
 
-The final output folder is kept simple for nontechnical users. After a successful split, each output folder contains only the finished song files.
+$ScriptDir = Split-Path -Parent $env:BAT_PATH
+$DownloadsRoot = Join-Path $ScriptDir "YouTube Album Splitter Songs"
+New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
 
-Artist and album naming is based on the YouTube title. It works best when titles look like:
+while ($true) {
+    Write-Host ""
+    Write-Host "Paste a YouTube album link, then press Enter."
+    Write-Host "Press Enter with no link to close."
+    Write-Host ""
 
-```text
-Artist - Album (Instrumental) - Full Album 2024
-Artist - Album (Instrumental Only) - Full EP 2024
-```
+    $Url = Read-Host "YouTube URL"
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        break
+    }
 
-For example, `Example Artist - Example Album (Instrumental) - Full Album 2024` becomes:
+    if ($Url -notmatch '^https?://((www|m|music)\.)?(youtube\.com|youtu\.be)/') {
+        Write-Host ""
+        Write-Host "That does not look like a YouTube link."
+        Write-Host "Copy the full YouTube video link and try again."
+        continue
+    }
 
-```text
-Artist: Example Artist
-Album:  Example Album
-Folder: Example Artist - Example Album
-```
+    try {
+        $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
+        New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic. If title cleanup would produce an empty name, it falls back to the original video title.
+        Write-Host ""
+        Write-Host "Downloading and splitting songs..."
 
-If the folder name already exists, the tool adds a date/time suffix so a second run does not overwrite the first one.
+        $script:DownloadSucceeded = $false
+        Invoke-YtDlpDownload
+        if (-not $script:DownloadSucceeded) {
+            if ((Test-Path -LiteralPath $OutDir) -and -not (Get-ChildItem -LiteralPath $OutDir -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $OutDir -Force
+            }
+            Write-Host ""
+            Write-Host "Paste another link to try again, or press Enter with no link to close."
+            continue
+        }
 
-Album art is forced to a square thumbnail. If the original thumbnail is already square, the crop does not change it. If it is wide or tall, the tool crops the center so the final cover art is 1:1.
+        $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        Where-Object { $_.Name -notmatch '^\d+\. ' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
 
-## Why It Uses Opus
+    $AlbumArtist = ""
+    $AlbumTitle = ""
+    if ($FullOpus) {
+        $VideoTitle = $FullOpus.BaseName -replace '\s*\[[^\]]+\]$', ''
+        $AlbumInfo = Get-AlbumInfoFromTitle -Title $VideoTitle
+        $AlbumArtist = $AlbumInfo.Artist
+        $AlbumTitle = $AlbumInfo.Album
 
-YouTube's best audio is often already Opus. When the source audio is already Opus, keeping the output as Opus avoids unnecessary re-encoding and keeps file sizes small.
+        $FolderName = if ($AlbumArtist) {
+            Get-SafeName "$AlbumArtist - $AlbumTitle"
+        } else {
+            Get-SafeName $AlbumTitle
+        }
 
-## Requirements
+        $AlbumDir = Join-Path $DownloadsRoot $FolderName
+        if (Test-Path -LiteralPath $AlbumDir) {
+            $AlbumDir = Join-Path $DownloadsRoot ("$FolderName " + (Get-Date -Format "yyyy-MM-dd HH-mm-ss"))
+        }
 
-Windows is required.
+        Move-Item -LiteralPath $OutDir -Destination $AlbumDir
+        $OutDir = $AlbumDir
+        $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+            Where-Object { $_.Name -notmatch '^\d+\. ' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+    }
 
-Most Windows 10 and Windows 11 computers already include `winget`. If yours does not, install **App Installer** from the Microsoft Store and run the script again.
+    $Cover = Join-Path $OutDir "cover.jpg"
+    if ($FullOpus) {
+        cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
+    }
 
-## Important
+    if (-not (Test-Path -LiteralPath $Cover)) {
+        Write-Host "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
+    }
 
-This works best with YouTube videos that show chapter markers on the progress bar. If a video has no chapters, the tool keeps the full audio file instead of leaving an empty folder.
+    Write-Host ""
+    Write-Host "Preparing tag fixer..."
+    py -3 -c "import mutagen" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        py -3 -m pip install --user mutagen
+    }
 
-Use this only for content you own, created, or have permission to download and process.
+    $TagScript = Join-Path $env:TEMP "fix_opus_chapter_tags.py"
+    @'
+from __future__ import annotations
 
-Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is a normal Windows security limitation for small unsigned projects, not proof that something is wrong. If you trust the file, click **More info** then **Run anyway**.
+import base64
+import re
+import sys
+from pathlib import Path
 
-## License
+from mutagen.flac import Picture
+from mutagen.oggopus import OggOpus
 
-This project is licensed under the GNU General Public License v3.0.
+chapter_dir = Path(sys.argv[1])
+cover_path = Path(sys.argv[2])
+album_title = sys.argv[3] if len(sys.argv) > 3 else ""
+album_artist = sys.argv[4] if len(sys.argv) > 4 else ""
+chapter_re = re.compile(r"^(?P<number>\d+)\.\s*(?P<title>.+)\.opus$", re.IGNORECASE)
 
-That means people can use, share, and modify it, but if they distribute modified versions, they must keep the same license and share the source code too.
+cover_tag = None
+if cover_path.is_file():
+    pic = Picture()
+    pic.type = 3
+    pic.mime = "image/jpeg"
+    pic.desc = "Cover (front)"
+    pic.data = cover_path.read_bytes()
+    cover_tag = base64.b64encode(pic.write()).decode("ascii")
+
+for path in sorted(chapter_dir.glob("*.opus")):
+    match = chapter_re.match(path.name)
+    if not match:
+        continue
+
+    number = str(int(match.group("number")))
+    song = match.group("title").strip()
+    filename_title = f"{number}. {song}"
+
+    audio = OggOpus(path)
+    audio["title"] = [song]
+    audio["tracknumber"] = [number]
+    if album_title:
+        audio["album"] = [album_title]
+    if album_artist:
+        audio["albumartist"] = [album_artist]
+        audio["artist"] = [album_artist]
+    audio.pop("track", None)
+    audio.pop("genre", None)
+    if cover_tag:
+        audio["metadata_block_picture"] = [cover_tag]
+    audio.save()
+
+    clean_name = f"{filename_title}.opus"
+    clean_path = path.with_name(clean_name)
+    if clean_path != path:
+        if clean_path.exists():
+            clean_path.unlink()
+        path.rename(clean_path)
+
+    print(f"Fixed: {clean_name}")
+'@ | Set-Content -LiteralPath $TagScript -Encoding UTF8
+
+    Write-Host ""
+    Write-Host "Fixing album art and tags..."
+    py -3 "$TagScript" "$OutDir" "$Cover" "$AlbumTitle" "$AlbumArtist"
+
+    if (Test-Path -LiteralPath $Cover) {
+        Remove-Item -LiteralPath $Cover -Force
+    }
+
+    $SongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        Where-Object { $_.Name -match '^\d+\. ' } |
+        Measure-Object).Count
+
+    if ($FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+        if ($SongCount -gt 0) {
+            Remove-Item -LiteralPath $FullOpus.FullName -Force
+        } else {
+            Write-Host "No separate song files were created. Keeping the full-length Opus file."
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Done."
+    Write-Host "Files are in: $OutDir"
+    if ($SongCount -gt 0) {
+        Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
+    } else {
+        Write-Host "This video did not create separate songs, so the full audio file was kept."
+    }
+    Write-Host ""
+    } catch {
+        Write-Host ""
+        Write-Host "Something went wrong while processing that link."
+        Write-Host $_.Exception.Message
+        Write-Host ""
+        Write-Host "Paste another link to try again, or press Enter with no link to close."
+        Write-Host ""
+    }
+}
