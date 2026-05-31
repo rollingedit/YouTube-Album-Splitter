@@ -2,7 +2,7 @@
 
 One file. Double-click. Paste a YouTube link. Get separate song files.
 
-YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning your own chaptered YouTube audio upload into clean individual song files.
+YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning a chaptered YouTube audio upload you own or have permission to use into clean individual song files.
 
 The annoying part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, keeping the names clean, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
@@ -22,7 +22,7 @@ It is designed for album-style YouTube uploads that show chapter markers on the 
 
 ## How To Use
 
-1. Go to `Releases`
+1. Go to the [latest release](../../releases/latest).
 2. Download `YouTube Album Splitter.bat`.
 3. Double-click it.
 4. Paste the YouTube video link when it asks.
@@ -50,6 +50,7 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 - Creates clean numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
+- Falls back to a generic folder/name when the YouTube title cannot be parsed cleanly.
 - Embeds album art into every split song file.
 - Crops album art to a centered 1:1 square so there are no black bars.
 - Sets each title tag to the clean song name, like `Song Name`.
@@ -65,7 +66,7 @@ The tool checks for the helper programs it needs and installs missing ones autom
 
 - yt-dlp, for downloading from YouTube.
 - FFmpeg, for audio conversion, thumbnail handling, and cover extraction.
-- Deno, for modern YouTube JavaScript challenge solving used by yt-dlp.
+- Deno, so yt-dlp can use its external JavaScript challenge-solving path when YouTube requires it.
 - Python, for final Opus metadata and album-art tagging.
 
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
@@ -129,7 +130,8 @@ If the retry still fails, the tool shows a plain-language message with common ca
 Each successful song file is cleaned up like this:
 
 ```text
-Folder:        Artist - Album
+Main folder:   YouTube Album Splitter Songs
+Album folder:  Artist - Album
 Filename:      1. Song Name.opus
 Title tag:     Song Name
 Artist tag:    Artist
@@ -139,9 +141,25 @@ Album art:     Embedded
 Genre:         Removed
 ```
 
-The final output folder is kept simple for nontechnical users. After a successful split, each output folder contains only the finished song files.
+The final output folder is kept simple for nontechnical users:
 
-Artist and album naming is based on the YouTube title. It works best when titles look like:
+```text
+YouTube Album Splitter Songs
+└─ Artist - Album
+   ├─ 1. Song Name.opus
+   ├─ 2. Song Name.opus
+   └─ 3. Song Name.opus
+```
+
+After a successful split, each album folder contains only the finished song files.
+
+Artist and album naming is based on the YouTube title. It works best when titles look cleanly like:
+
+```text
+Artist - Album
+```
+
+It also tolerates common extra upload text like:
 
 ```text
 Artist - Album (Instrumental) - Full Album 2024
