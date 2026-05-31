@@ -1,8 +1,16 @@
 # YouTube Album Splitter
 
-Split your own chaptered YouTube audio upload into separate song files automatically.
+One file. Double-click. Paste a YouTube link. Get separate song files.
 
-Paste a YouTube link you own or have permission to use, and this tool downloads the audio, splits it by the video's YouTube song markers, adds album art, fixes track numbers, and saves clean individual Opus files like:
+YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning your own chaptered YouTube audio upload into clean individual song files.
+
+The annoying part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, keeping the names clean, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
+
+This tool wraps that whole workflow into one `.bat` file. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. The helper scripts it needs are created temporarily by the tool itself.
+
+It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts automatically.
+
+It saves files like:
 
 ```text
 1. Song Name.opus
@@ -10,11 +18,7 @@ Paste a YouTube link you own or have permission to use, and this tool downloads 
 3. Song Name.opus
 ```
 
-It is designed for album-style YouTube uploads that show chapter markers on the YouTube progress bar.
-
-Many videos create those chapters from timestamps in the description, but timestamps alone are not always enough. If YouTube does not show chapter markers on the progress bar, the tool may keep the full audio file instead of splitting it.
-
-No command-line knowledge is needed. After you double-click the file and paste the link, the tool handles the rest. When it finishes, you can paste another link right away or press Enter with no link to close.
+It is designed for album-style YouTube uploads that show chapter markers on the YouTube progress bar. Many videos create those chapters from timestamps in the description, but timestamps alone are not always enough. If YouTube does not show chapter markers on the progress bar, the tool may keep the full audio file instead of splitting it.
 
 ## How To Use
 
@@ -47,7 +51,7 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
 - Embeds album art into every split song file.
-- Crops album art to a centered 1:1 square so music apps display it cleanly.
+- Crops album art to a centered 1:1 square so there are no black bars.
 - Sets each title tag to the clean song name, like `Song Name`.
 - Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
 - Sets each track number tag to the correct number, like `1`.
@@ -65,6 +69,39 @@ The tool checks for the helper programs it needs and installs missing ones autom
 - Python, for final Opus metadata and album-art tagging.
 
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
+
+## How It Works
+
+The released version is one `.bat` file on purpose. A cleaner developer version could be split into separate files, but that would make normal users download and keep multiple scripts together. This tool hides that complexity inside one double-click file.
+
+Conceptually, the tool is still organized in layers:
+
+```text
+BAT launcher
+-> embedded PowerShell controller
+-> temporary Python tag fixer
+-> yt-dlp / FFmpeg / mutagen / Deno backend
+```
+
+What each part does:
+
+- **BAT**: Windows double-click entrypoint. Starts everything without requiring the user to open a terminal.
+- **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
+- **yt-dlp**: Downloads the YouTube audio, reads YouTube chapter markers, and splits the upload into separate song files.
+- **FFmpeg**: Media backend for audio extraction, thumbnail conversion, square cover cropping, and stream processing.
+- **Python**: Runs only after Python exists. It is used for final metadata cleanup.
+- **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
+- **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
+- **winget**: Windows package installer used to install missing helper tools automatically.
+
+So the internal design is modular, but the released user experience stays simple:
+
+```text
+Download one file
+Double-click
+Paste link
+Get song files
+```
 
 ## Reliability Features
 
