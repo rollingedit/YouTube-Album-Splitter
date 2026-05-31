@@ -4,7 +4,7 @@ One file. Double-click. Paste a YouTube link. Get separate song files.
 
 YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning a chaptered YouTube audio upload you own or have permission to use into separate song files automatically.
 
-The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, keeping the names clean, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
+The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, rename track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
 This tool does all of that automatically. The automation behind it is custom-built, then packaged into one self-contained `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
 
@@ -47,13 +47,13 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
 - Downloads the best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers.
-- Creates clean numbered filenames like `1. Song Name.opus`.
+- Creates numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
-- Falls back to a generic folder/name when the YouTube title cannot be parsed cleanly.
+- Falls back to a generic folder/name when the YouTube title cannot be parsed.
 - Embeds album art into every split song file.
 - Crops album art to a centered 1:1 square so there are no black bars.
-- Sets each title tag to the clean song name, like `Song Name`.
+- Sets each title tag to the proper song name, like `Song Name`.
 - Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
 - Sets each track number tag to the correct number, like `1`.
 - Removes genre metadata so files are not mislabeled.
@@ -73,7 +73,7 @@ It also installs the Python metadata library `mutagen` only if it is missing. It
 
 ## How It Works
 
-The released version is one `.bat` file on purpose. A cleaner developer version could be split into separate files, but that would make normal users download and keep multiple scripts together. This tool hides that complexity inside one double-click file.
+The released version is one `.bat` file on purpose. A contemporary version could be split into separate files, but that would make normal users download and keep multiple scripts together. This tool hides that complexity inside one double-click file.
 
 Conceptually, the tool is still organized in layers:
 
@@ -174,7 +174,7 @@ Album:  Example Album
 Folder: Example Artist - Example Album
 ```
 
-If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic. If title cleanup would produce an empty name, it falls back to the original video title.
+If the title cannot be parsed, the tool still downloads and tags the songs, but the album folder/name may be more generic. If title cleanup would produce an empty name, it falls back to the original video title.
 
 If the folder name already exists, the tool adds a date/time suffix so a second run does not overwrite the first one.
 
