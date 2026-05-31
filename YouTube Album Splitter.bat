@@ -95,7 +95,7 @@ function Invoke-YtDlpDownload {
 }
 
 Write-Host ""
-Write-Host "YouTube chapter downloader"
+Write-Host "YouTube Album Splitter"
 Write-Host ""
 
 Write-Host "Checking required tools..."
@@ -104,47 +104,52 @@ Ensure-Command -Command "ffmpeg" -WingetId "Gyan.FFmpeg" -Name "FFmpeg"
 Ensure-Command -Command "py" -WingetId "Python.Python.3.12" -Name "Python"
 Ensure-Command -Command "deno" -WingetId "DenoLand.Deno" -Name "Deno"
 
-Write-Host ""
-Write-Host "Paste the YouTube link, then press Enter."
-Write-Host ""
-
-$Url = Read-Host "YouTube URL"
-if ([string]::IsNullOrWhiteSpace($Url)) {
-    throw "No URL was entered."
-}
-
 $ScriptDir = Split-Path -Parent $env:BAT_PATH
-$OutDir = Join-Path $ScriptDir "downloaded chapters"
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$DownloadsRoot = Join-Path $ScriptDir "YouTube Album Splitter Songs"
+New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
 
-Write-Host ""
-Write-Host "Downloading and splitting chapters..."
+while ($true) {
+    Write-Host ""
+    Write-Host "Paste a YouTube album link, then press Enter."
+    Write-Host "Press Enter with no link to close."
+    Write-Host ""
 
-Invoke-YtDlpDownload
+    $Url = Read-Host "YouTube URL"
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        break
+    }
 
-$FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-    Where-Object { $_.Name -notmatch '^\d+\. ' } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
+    $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$Cover = Join-Path $OutDir "cover.jpg"
-if ($FullOpus) {
-    cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
-}
+    Write-Host ""
+    Write-Host "Downloading and splitting songs..."
 
-if (-not (Test-Path -LiteralPath $Cover)) {
-    Write-Host "Warning: could not extract album art. Tags will still be fixed, but chapters may not show cover art."
-}
+    Invoke-YtDlpDownload
 
-Write-Host ""
-Write-Host "Preparing tag fixer..."
-py -3 -c "import mutagen" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    py -3 -m pip install --user mutagen
-}
+    $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        Where-Object { $_.Name -notmatch '^\d+\. ' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
 
-$TagScript = Join-Path $env:TEMP "fix_opus_chapter_tags.py"
-@'
+    $Cover = Join-Path $OutDir "cover.jpg"
+    if ($FullOpus) {
+        cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
+    }
+
+    if (-not (Test-Path -LiteralPath $Cover)) {
+        Write-Host "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
+    }
+
+    Write-Host ""
+    Write-Host "Preparing tag fixer..."
+    py -3 -c "import mutagen" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        py -3 -m pip install --user mutagen
+    }
+
+    $TagScript = Join-Path $env:TEMP "fix_opus_chapter_tags.py"
+    @'
 from __future__ import annotations
 
 import base64
@@ -196,29 +201,33 @@ for path in sorted(chapter_dir.glob("*.opus")):
     print(f"Fixed: {clean_name}")
 '@ | Set-Content -LiteralPath $TagScript -Encoding UTF8
 
-Write-Host ""
-Write-Host "Fixing album art and tags..."
-py -3 "$TagScript" "$OutDir" "$Cover"
+    Write-Host ""
+    Write-Host "Fixing album art and tags..."
+    py -3 "$TagScript" "$OutDir" "$Cover"
 
-if (Test-Path -LiteralPath $Cover) {
-    Remove-Item -LiteralPath $Cover -Force
-}
-
-$ChapterCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-    Where-Object { $_.Name -match '^\d+\. ' } |
-    Measure-Object).Count
-
-if ($FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
-    if ($ChapterCount -gt 0) {
-        Remove-Item -LiteralPath $FullOpus.FullName -Force
-    } else {
-        Write-Host "No chapter files were created. Keeping the full-length Opus file."
+    if (Test-Path -LiteralPath $Cover) {
+        Remove-Item -LiteralPath $Cover -Force
     }
-}
 
-Write-Host ""
-Write-Host "Done."
-Write-Host "Files are in: $OutDir"
-Write-Host "Each chapter is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
-Write-Host ""
-Read-Host "Press Enter to close"
+    $SongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        Where-Object { $_.Name -match '^\d+\. ' } |
+        Measure-Object).Count
+
+    if ($FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+        if ($SongCount -gt 0) {
+            Remove-Item -LiteralPath $FullOpus.FullName -Force
+        } else {
+            Write-Host "No separate song files were created. Keeping the full-length Opus file."
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Done."
+    Write-Host "Files are in: $OutDir"
+    if ($SongCount -gt 0) {
+        Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
+    } else {
+        Write-Host "This video did not create separate songs, so the full audio file was kept."
+    }
+    Write-Host ""
+}
