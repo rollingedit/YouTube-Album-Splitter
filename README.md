@@ -39,7 +39,8 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
 - Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
-- Treats each pasted link as one video, even if the URL includes a playlist.
+- Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
+- Treats each pasted link as one selected video, even if the URL includes a playlist.
 - Downloads the best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers.
 - Creates clean numbered filenames like `1. Song Name.opus`.
@@ -118,7 +119,7 @@ Album:  Example Album
 Folder: Example Artist - Example Album
 ```
 
-If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic.
+If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic. If title cleanup would produce an empty name, it falls back to the original video title.
 
 If the folder name already exists, the tool adds a date/time suffix so a second run does not overwrite the first one.
 
