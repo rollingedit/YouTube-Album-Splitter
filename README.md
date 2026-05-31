@@ -18,12 +18,11 @@ No command-line knowledge is needed. After you double-click the file and paste t
 
 ## How To Use
 
-1. Click the green **Code** button near the top of this GitHub page.
-2. Click **Download ZIP**.
-3. Open the downloaded ZIP/folder.
-4. Double-click `YouTube Album Splitter.bat`.
-5. Paste the YouTube video link when it asks.
-6. Press Enter.
+1. Go to `Releases`
+2. Download `YouTube Album Splitter.bat`.
+3. Double-click it.
+4. Paste the YouTube video link when it asks.
+5. Press Enter.
 
 Finished songs appear in a folder named:
 
@@ -117,3 +116,5 @@ Windows may show a SmartScreen or antivirus warning because this is an unsigned 
 This project is licensed under the GNU General Public License v3.0.
 
 That means people can use, share, and modify it, but if they distribute modified versions, they must keep the same license and share the source code too.
+
+When publishing this on GitHub, add a `LICENSE` file using GitHub's **GNU General Public License v3.0** template so the license is recognized properly.
