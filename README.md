@@ -14,7 +14,7 @@ It is designed for album-style YouTube uploads that show chapter markers on the 
 
 Many videos create those chapters from timestamps in the description, but timestamps alone are not always enough. If YouTube does not show chapter markers on the progress bar, the tool may keep the full audio file instead of splitting it.
 
-No command-line knowledge is needed. After you double-click the file and paste the link, the tool handles the rest.
+No command-line knowledge is needed. After you double-click the file and paste the link, the tool handles the rest. When it finishes, you can paste another link right away or press Enter with no link to close.
 
 ## How To Use
 
@@ -37,11 +37,14 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 
 - One-file Windows tool. No separate installer or setup script.
 - Prompts for a YouTube link instead of making users edit commands.
+- Lets you process multiple links in one session.
+- Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
 - Treats each pasted link as one video, even if the URL includes a playlist.
 - Downloads the best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers.
 - Creates clean numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
+- Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
 - Embeds album art into every split song file.
 - Crops album art to a centered 1:1 square so music apps display it cleanly.
 - Sets each title tag to the clean song name, like `Song Name`.
@@ -74,7 +77,7 @@ If the first download attempt fails, it automatically updates the main download 
 
 If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
 
-This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the problem is an invalid link, private video, age restriction, region lock, or internet issue, updating will not fix that, but the tool will still give a readable message instead of silently failing.
+This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that, but the tool will still give a readable message instead of silently failing.
 
 If the retry still fails, the tool shows a plain-language message with common causes, such as:
 
@@ -116,6 +119,8 @@ Folder: Example Artist - Example Album
 ```
 
 If the title cannot be parsed cleanly, the tool still downloads and tags the songs, but the album folder/name may be more generic.
+
+If the folder name already exists, the tool adds a date/time suffix so a second run does not overwrite the first one.
 
 Album art is forced to a square thumbnail. If the original thumbnail is already square, the crop does not change it. If it is wide or tall, the tool crops the center so the final cover art is 1:1.
 
