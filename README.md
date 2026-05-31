@@ -6,7 +6,7 @@ YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows 
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, keeping the names clean, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
-This tool wraps that whole workflow into one `.bat` file. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. The helper scripts it needs are created temporarily by the tool itself.
+This tool does all of that automatically. The automation behind it is custom-built, then packaged into one self-contained `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
 
 It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts automatically.
 
