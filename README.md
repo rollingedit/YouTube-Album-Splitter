@@ -2,6 +2,8 @@
 
 One file. Double-click. Paste a YouTube link. Get separate song files.
 
+![YouTube Album Splitter running in Windows Terminal](assets/screenshot.png)
+
 YouTube Album Splitter is a beginner-friendly, no manual setup Windows tool for turning a timestamped YouTube album upload you own or have permission to use into separate song files automatically.
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
