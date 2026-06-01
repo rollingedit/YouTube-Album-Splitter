@@ -91,6 +91,8 @@ What each part does:
 - **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
 - **winget**: Windows package installer used to install missing helper tools automatically.
 
+yt-dlp handles the initial thumbnail, then the tool re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
+
 So the internal design is modular, but the released user experience stays simple:
 
 ```text
