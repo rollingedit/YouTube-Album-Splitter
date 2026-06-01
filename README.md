@@ -31,14 +31,14 @@ It is designed for album-style YouTube uploads that have track timestamps. It us
 5. Press Enter.
 6. Paste another link to process another upload, type `aac` to convert existing Opus files to AAC `.m4a`, or press Enter with no link to close.
 
-Finished songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together.
+After a run finishes, songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together. The rest of this README spells out what the tool does during that one paste-link flow.
 
 ## Features
 
 - One-file Windows tool. No separate installer or setup script.
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
-- Lets you type `aac` to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
+- Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
 - Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
 - Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
@@ -59,7 +59,7 @@ Finished songs are saved into a `YouTube Album Splitter Songs` folder next to th
 
 ## Timestamp Splitting
 
-The tool uses track times in this order:
+The split behavior from the feature list follows a strict order:
 
 1. YouTube chapter markers from the video.
 2. Timestamp lines in the video description.
@@ -79,7 +79,7 @@ For description fallback, the tool requires at least two timestamps, the first t
 
 ## Automatic Setup
 
-The tool checks for the helper programs it needs and installs missing ones automatically:
+To make that one-file workflow work on a fresh Windows machine, the tool checks for the helper programs it needs and installs missing ones automatically:
 
 - yt-dlp, for downloading from YouTube.
 - FFmpeg, for audio conversion, chapter splitting, and cover extraction.
@@ -90,11 +90,11 @@ For Python, the tool first tries existing `py -3`, `python`, and `python3` comma
 
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
 
-Exact package IDs, network destinations, file locations, and uninstall commands are listed in [Security, Privacy, and System Changes](#security-privacy-and-system-changes).
+The exact package IDs, network destinations, file locations, and uninstall commands are collected later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run is doing.
 
 ## How It Works
 
-The released version is one `.bat` file on purpose. A contemporary version could be split into separate files, but that would make normal users download and keep multiple scripts together. This tool hides that complexity inside one double-click file.
+The released version is one `.bat` file on purpose. A contemporary version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
 
 Conceptually, the tool is still organized in layers:
 
@@ -118,7 +118,7 @@ What each part does:
 
 yt-dlp handles the initial thumbnail, then the tool re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
 
-If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg converts existing `.opus` files in the output folder into 192 kbps `.m4a` AAC files. It strips leftover chapter/data streams during conversion so each AAC file behaves like a normal single song, then Mutagen writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after the matching AAC file is created and tagged successfully.
+The same internal pieces handle the optional AAC path. If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg creates 192 kbps `.m4a` files and strips leftover chapter/data streams so each AAC file behaves like a normal single song. Mutagen then writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after their AAC replacements are created and tagged successfully.
 
 So the internal design is modular, but the released user experience stays simple:
 
@@ -143,7 +143,7 @@ If the active `yt-dlp` appears to be a Python-installed version, it also repairs
 
 If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same update/retry path.
 
-This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If YouTube asks this machine for sign-in or extra verification, the tool also skips the update step because updating will not fix that. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that either, but the tool will still give a readable message instead of silently failing.
+This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is obviously not a YouTube link, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification. Private videos, age restrictions, region locks, and internet issues are handled as readable failures instead of silent exits.
 
 If the retry still fails, the tool shows a plain-language message with common causes, such as:
 
@@ -206,7 +206,7 @@ If the folder name already exists, the tool adds a date/time suffix so a second 
 
 Album art is forced to a square thumbnail. If the original thumbnail is already square, the crop does not change it. If it is wide or tall, the tool crops the center so the final cover art is 1:1.
 
-If you use the optional AAC conversion, the tool creates `.m4a` files next to the `.opus` files, replaces any matching `.m4a` from an earlier run, removes each Opus file after its AAC version is created successfully, and leaves the Opus file alone if conversion fails.
+The optional AAC conversion follows the same folder layout. It creates `.m4a` files next to the `.opus` files, replaces any matching `.m4a` from an earlier run, removes each Opus file after its AAC version is created successfully, and leaves the Opus file alone if conversion fails.
 
 ## Why It Uses Opus
 
@@ -216,13 +216,13 @@ If a video does not expose an Opus stream, yt-dlp may fall back to the best avai
 
 ## Optional AAC Conversion
 
-Opus is the default because it is usually the best match for YouTube audio. If you need wider compatibility, type `aac` at the prompt after downloading songs.
+Because Opus is the normal output, AAC conversion is treated as an explicit second step. If you need wider compatibility, type `aac` at the prompt after downloading songs.
 
 The AAC converter scans the `YouTube Album Splitter Songs` folder for `.opus` files and turns them into `.m4a` AAC files. This is a real audio conversion, so it can take longer than the normal download/split step.
 
 During conversion, the tool:
 
-- creates a clean audio-only `.m4a` file,
+- creates an audio-only `.m4a` file,
 - strips leftover chapter/data streams so the file behaves like one normal song,
 - reads the embedded square Opus cover art directly,
 - writes M4A-native title, artist, album, album artist, track number, and cover art tags,
