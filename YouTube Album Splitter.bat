@@ -1,7 +1,15 @@
 @echo off
 set "BAT_PATH=%~f0"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:BAT_PATH; $c=Get-Content -LiteralPath $p -Raw; $m='# POWERSHELL_' + 'PAYLOAD'; $parts=$c -split [regex]::Escape($m),2; Invoke-Expression $parts[1]"
-exit /b %ERRORLEVEL%
+set "ERR=%ERRORLEVEL%"
+if not "%ERR%"=="0" (
+    echo.
+    echo YouTube Album Splitter stopped before it could finish.
+    echo If an error message appeared above, copy it or screenshot this window.
+    echo.
+    pause
+)
+exit /b %ERR%
 
 # POWERSHELL_PAYLOAD
 $ErrorActionPreference = "Stop"
@@ -38,6 +46,85 @@ function Ensure-Command {
     }
 
     Write-Host "$Name installed."
+}
+
+function Resolve-PythonCommand {
+    Refresh-Path
+
+    $candidates = @(
+        @{ Command = "py"; Args = @("-3") },
+        @{ Command = "python"; Args = @() },
+        @{ Command = "python3"; Args = @() }
+    )
+
+    foreach ($candidate in $candidates) {
+        $command = Get-Command $candidate.Command -ErrorAction SilentlyContinue
+        if (-not $command) {
+            continue
+        }
+
+        $allArgs = @()
+        $allArgs += $candidate.Args
+        $allArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)")
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $command.Source @allArgs *> $null
+            $pythonCheckExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($pythonCheckExitCode -eq 0) {
+            return [pscustomobject]@{
+                Command = $command.Source
+                Args = $candidate.Args
+            }
+        }
+    }
+
+    return $null
+}
+
+function Ensure-PythonCommand {
+    $script:PythonCommand = Resolve-PythonCommand
+    if ($script:PythonCommand) {
+        Write-Host "Python found."
+        return
+    }
+
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Windows App Installer / winget is missing. Install 'App Installer' from the Microsoft Store, then run this again."
+    }
+
+    Write-Host "Python not found. Installing it now..."
+    winget install --id Python.Python.3.12 -e --accept-package-agreements --accept-source-agreements
+    Refresh-Path
+
+    $script:PythonCommand = Resolve-PythonCommand
+    if (-not $script:PythonCommand) {
+        throw "Python was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+    }
+
+    Write-Host "Python installed."
+}
+
+function Invoke-Python {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    if (-not $script:PythonCommand) {
+        $script:PythonCommand = Resolve-PythonCommand
+    }
+
+    if (-not $script:PythonCommand) {
+        throw "Python is not available."
+    }
+
+    $allArgs = @()
+    $allArgs += $script:PythonCommand.Args
+    $allArgs += $Arguments
+    & $script:PythonCommand.Command @allArgs
 }
 
 function Remove-StaleAacWorkFiles {
@@ -83,17 +170,17 @@ function Convert-ExistingOpusToAac {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        py -3 -c "import mutagen" 2>$null
+        Invoke-Python -Arguments @("-c", "import mutagen") 2>$null
         $mutagenCheckExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
     if ($mutagenCheckExitCode -ne 0) {
-        py -3 -m pip install --user mutagen
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "mutagen")
     }
 
-    $M4aTagScript = Join-Path $env:TEMP "fix_m4a_tags.py"
+    $M4aTagScript = Join-Path $env:TEMP ("fix_m4a_tags." + [guid]::NewGuid().ToString("N") + ".py")
     @'
 from __future__ import annotations
 
@@ -197,7 +284,7 @@ audio.save()
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                $tagOutput = & py -3 "$M4aTagScript" "$($opus.FullName)" "$tempAacPath" 2>&1
+                $tagOutput = Invoke-Python -Arguments @($M4aTagScript, $opus.FullName, $tempAacPath) 2>&1
                 $tagExitCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $previousErrorActionPreference
@@ -257,6 +344,9 @@ audio.save()
     Write-Host ""
     Write-Host "AAC conversion finished. Converted: $converted. Replaced existing AAC: $replaced. Failed: $failed."
     Write-Host "Removed Opus originals after successful AAC conversion: $deleted."
+    if (Test-Path -LiteralPath $M4aTagScript) {
+        Remove-Item -LiteralPath $M4aTagScript -Force -ErrorAction SilentlyContinue
+    }
     Remove-StaleAacWorkFiles -Root $Root
 }
 
@@ -273,7 +363,6 @@ function Invoke-YtDlpDownload {
         "--embed-metadata",
         "--embed-thumbnail",
         "--convert-thumbnails", "jpg",
-        "--ppa", "ThumbnailsConvertor+ffmpeg_o:-c:v mjpeg -vf crop=ih:ih",
         "--ppa", "SplitChapters+ffmpeg_o:-vn",
         "-o", "chapter:%(section_number)d. %(section_title)s.%(ext)s",
         $Url
@@ -317,7 +406,7 @@ function Invoke-YtDlpDownload {
     $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
     if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
         Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
-        py -3 -m pip install --user --upgrade "yt-dlp[default]" curl-cffi
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
     }
 
     Refresh-Path
@@ -340,6 +429,177 @@ function Invoke-YtDlpDownload {
     }
 
     $script:DownloadSucceeded = $true
+}
+
+function Get-DescriptionTimestampChapters {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    Write-Host "Checking video description for timestamped tracks..."
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $metadataOutput = & yt-dlp --skip-download --dump-single-json --no-warnings --no-playlist --remote-components "ejs:github" $Url 2>$null
+        $metadataExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($metadataExitCode -ne 0) {
+        Write-Host "Could not read video description for timestamp fallback."
+        return @()
+    }
+
+    try {
+        $metadata = ($metadataOutput -join "`n") | ConvertFrom-Json
+    } catch {
+        Write-Host "Could not parse video metadata for timestamp fallback."
+        return @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($metadata.description) -or -not $metadata.duration) {
+        return @()
+    }
+
+    $duration = [double]$metadata.duration
+    $chapters = @()
+
+    foreach ($rawLine in ($metadata.description -split "`n")) {
+        $line = $rawLine.Trim()
+        $line = $line -replace '^[\s\-\*\u2022]+', ''
+        $line = $line -replace '^\d+[\.)]\s+', ''
+        $line = $line -replace '^\d+\s*[-–—]\s+', ''
+
+        if ($line -match '^[\[\(]?(?<time>(?:(?<hours>\d{1,2}):)?(?<minutes>\d{1,2}):(?<seconds>\d{2}))[\]\)]?\s*(?:[-–—:|]\s*)?(?<title>.+?)\s*$') {
+            $title = $Matches.title.Trim()
+        } elseif ($line -match '^(?<title>.+?)\s*(?:[-–—:|]\s*)?[\(\[](?<time>(?:(?<hours>\d{1,2}):)?(?<minutes>\d{1,2}):(?<seconds>\d{2}))[\)\]]\s*$') {
+            $title = $Matches.title.Trim()
+        } else {
+            continue
+        }
+
+        $hours = 0
+        if ($Matches.hours) {
+            $hours = [int]$Matches.hours
+        }
+
+        $startTime = ($hours * 3600) + ([int]$Matches.minutes * 60) + [int]$Matches.seconds
+        $title = $title.Trim().Trim("-").Trim()
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            continue
+        }
+
+        $chapters += [pscustomobject]@{
+            StartTime = [double]$startTime
+            Title = $title
+        }
+    }
+
+    if ($chapters.Count -lt 2) {
+        return @()
+    }
+
+    if ($chapters[0].StartTime -ne 0) {
+        Write-Host "Timestamp fallback skipped because the first timestamp is not 0:00."
+        return @()
+    }
+
+    for ($i = 0; $i -lt $chapters.Count; $i++) {
+        if ($chapters[$i].StartTime -ge $duration) {
+            return @()
+        }
+
+        if ($i -gt 0 -and $chapters[$i].StartTime -le $chapters[$i - 1].StartTime) {
+            return @()
+        }
+    }
+
+    $result = @()
+    for ($i = 0; $i -lt $chapters.Count; $i++) {
+        $endTime = if ($i + 1 -lt $chapters.Count) {
+            $chapters[$i + 1].StartTime
+        } else {
+            $duration
+        }
+
+        if ($endTime -le $chapters[$i].StartTime) {
+            return @()
+        }
+
+        $result += [pscustomobject]@{
+            StartTime = $chapters[$i].StartTime
+            EndTime = [double]$endTime
+            Title = $chapters[$i].Title
+        }
+    }
+
+    return $result
+}
+
+function Invoke-DescriptionTimestampFallback {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutDir,
+        [Parameter(Mandatory = $true)][string]$FullOpusPath
+    )
+
+    $existingSongs = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d+\. ' }
+
+    if ($existingSongs) {
+        return $false
+    }
+
+    $chapters = @(Get-DescriptionTimestampChapters -Url $Url)
+    if ($chapters.Count -lt 2) {
+        Write-Host "No usable description timestamps were found."
+        return $false
+    }
+
+    Write-Host "Found $($chapters.Count) timestamped track(s) in the description. Splitting from those timestamps..."
+
+    $createdFiles = @()
+    for ($i = 0; $i -lt $chapters.Count; $i++) {
+        $trackNumber = $i + 1
+        $trackTitle = $chapters[$i].Title
+        $safeTitle = Get-SafeName $trackTitle
+        $outputPath = Join-Path $OutDir ("$trackNumber. $safeTitle.opus")
+        $startSeconds = $chapters[$i].StartTime
+        $durationSeconds = [Math]::Max(0.001, $chapters[$i].EndTime - $chapters[$i].StartTime)
+
+        if (Test-Path -LiteralPath $outputPath) {
+            Remove-Item -LiteralPath $outputPath -Force
+        }
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $ffmpegOutput = & ffmpeg -hide_banner -y -ss $startSeconds -i $FullOpusPath -t $durationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $outputPath 2>&1
+            $ffmpegExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        $createdFile = Get-Item -LiteralPath $outputPath -ErrorAction SilentlyContinue
+        if ($ffmpegExitCode -ne 0 -or -not $createdFile -or $createdFile.Length -le 0) {
+            Write-Host "Timestamp fallback could not split: $trackTitle"
+            $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+            foreach ($file in $createdFiles) {
+                if (Test-Path -LiteralPath $file) {
+                    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+                }
+            }
+            if (Test-Path -LiteralPath $outputPath) {
+                Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+            }
+            return $false
+        }
+
+        $createdFiles += $outputPath
+    }
+
+    Write-Host "Timestamp fallback created $($createdFiles.Count) track file(s)."
+    return $true
 }
 
 function Get-SafeName {
@@ -380,7 +640,7 @@ function Get-AlbumInfoFromTitle {
     $artist = ""
     $album = $clean
 
-    if ($clean -match '^\s*(?<artist>.+?)\s+-\s+(?<album>.+?)\s*$') {
+    if ($clean -match '^\s*(?<artist>.+?)\s+[-–—]\s+(?<album>.+?)\s*$') {
         $artist = $Matches.artist.Trim()
         $album = $Matches.album.Trim()
     }
@@ -403,7 +663,7 @@ Write-Host ""
 Write-Host "Checking required tools..."
 Ensure-Command -Command "yt-dlp" -WingetId "yt-dlp.yt-dlp" -Name "yt-dlp"
 Ensure-Command -Command "ffmpeg" -WingetId "Gyan.FFmpeg" -Name "FFmpeg"
-Ensure-Command -Command "py" -WingetId "Python.Python.3.12" -Name "Python"
+Ensure-PythonCommand
 Ensure-Command -Command "deno" -WingetId "DenoLand.Deno" -Name "Deno"
 
 $ScriptDir = Split-Path -Parent $env:BAT_PATH
@@ -417,7 +677,7 @@ while ($true) {
     Write-Host "Press Enter with no link to close."
     Write-Host ""
 
-    $Url = Read-Host "YouTube URL"
+    $Url = (Read-Host "YouTube URL").Trim().Trim('"')
     if ([string]::IsNullOrWhiteSpace($Url)) {
         break
     }
@@ -491,11 +751,27 @@ while ($true) {
         # yt-dlp embeds the source thumbnail first. We extract a square cover from
         # the full Opus and later re-embed it with Mutagen into each split file's
         # Opus METADATA_BLOCK_PICTURE tag, which music players read reliably.
-        cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & ffmpeg -hide_banner -y -i $FullOpus.FullName -map "0:v:0" -frames:v 1 -vf "crop=min(iw\,ih):min(iw\,ih)" -update 1 $Cover 2>$null
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
     }
 
     if (-not (Test-Path -LiteralPath $Cover)) {
         Write-Host "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
+    }
+
+    $NativeSongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d+\. ' } |
+        Measure-Object).Count
+
+    if ($NativeSongCount -eq 0 -and $FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+        Write-Host ""
+        Write-Host "No YouTube chapter split files were created. Trying description timestamps..."
+        Invoke-DescriptionTimestampFallback -Url $Url -OutDir $OutDir -FullOpusPath $FullOpus.FullName | Out-Null
     }
 
     Write-Host ""
@@ -503,17 +779,17 @@ while ($true) {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        py -3 -c "import mutagen" 2>$null
+        Invoke-Python -Arguments @("-c", "import mutagen") 2>$null
         $mutagenCheckExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
     if ($mutagenCheckExitCode -ne 0) {
-        py -3 -m pip install --user mutagen
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "mutagen")
     }
 
-    $TagScript = Join-Path $env:TEMP "fix_opus_chapter_tags.py"
+    $TagScript = Join-Path $env:TEMP ("fix_opus_chapter_tags." + [guid]::NewGuid().ToString("N") + ".py")
     @'
 from __future__ import annotations
 
@@ -575,7 +851,25 @@ for path in sorted(chapter_dir.glob("*.opus")):
 
     Write-Host ""
     Write-Host "Fixing album art and tags..."
-    py -3 "$TagScript" "$OutDir" "$Cover" "$AlbumTitle" "$AlbumArtist"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $tagOutput = Invoke-Python -Arguments @($TagScript, $OutDir, $Cover, $AlbumTitle, $AlbumArtist) 2>&1
+        $tagExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($tagExitCode -eq 0) {
+        $tagOutput | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Host "Tag fixer failed. Keeping the full-length Opus file if it still exists."
+        $tagOutput | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
+    }
+
+    if (Test-Path -LiteralPath $TagScript) {
+        Remove-Item -LiteralPath $TagScript -Force -ErrorAction SilentlyContinue
+    }
 
     if (Test-Path -LiteralPath $Cover) {
         Remove-Item -LiteralPath $Cover -Force
@@ -586,8 +880,10 @@ for path in sorted(chapter_dir.glob("*.opus")):
         Measure-Object).Count
 
     if ($FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
-        if ($SongCount -gt 0) {
+        if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
             Remove-Item -LiteralPath $FullOpus.FullName -Force
+        } elseif ($SongCount -gt 0) {
+            Write-Host "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too."
         } else {
             Write-Host "No separate song files were created. Keeping the full-length Opus file."
         }

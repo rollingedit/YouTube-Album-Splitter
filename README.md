@@ -2,7 +2,7 @@
 
 One file. Double-click. Paste a YouTube link. Get separate song files.
 
-YouTube Album Splitter is a beginner-friendly, no-setup Windows tool for turning a chaptered YouTube album upload you own or have permission to use into separate song files automatically.
+YouTube Album Splitter is a beginner-friendly, no-setup Windows tool for turning a timestamped YouTube album upload you own or have permission to use into separate song files automatically.
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
@@ -18,7 +18,7 @@ It saves files like:
 3. Song Name.opus
 ```
 
-It is designed for album-style YouTube uploads that show chapter markers on the YouTube progress bar. Many videos create those chapters from timestamps in the description, but timestamps alone are not always enough. If YouTube does not show chapter markers on the progress bar, the tool may keep the full audio file instead of splitting it.
+It is designed for album-style YouTube uploads that have track timestamps. It uses YouTube chapter markers first. If YouTube does not expose chapter markers, it falls back to timestamp lines from the video description. If neither source gives usable track times, the tool keeps the full audio file instead of leaving an empty folder.
 
 ## How To Use
 
@@ -40,8 +40,8 @@ Finished songs are saved into a `YouTube Album Splitter Songs` folder next to th
 - Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
 - Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
-- Downloads the best available Opus audio.
-- Splits the video into separate song files using YouTube chapter markers.
+- Prefers YouTube's best available Opus audio.
+- Splits the video into separate song files using YouTube chapter markers or description timestamps.
 - Creates numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
@@ -53,14 +53,34 @@ Finished songs are saved into a `YouTube Album Splitter Songs` folder next to th
 - Sets each track number tag to the correct number, like `1`.
 - Removes genre metadata so files are not mislabeled.
 - Deletes temporary files after the final tracks are finished.
-- Keeps the full audio file only if the video has no chapters, so the output folder is never empty.
+- Keeps the full audio file only if no usable chapter markers or description timestamps are found, so the output folder is never empty.
+
+## Timestamp Splitting
+
+The tool uses track times in this order:
+
+1. YouTube chapter markers from the video.
+2. Timestamp lines in the video description.
+3. Full audio fallback if no usable track times are found.
+
+Description timestamps can look like:
+
+```text
+0:00 Song Name
+3:15 - Song Name
+[6:43] Song Name
+01 - Song Name (13:52)
+Song Name [17:34]
+```
+
+For description fallback, the tool requires at least two timestamps, the first timestamp must be `0:00`, and times must increase in order. This keeps the fallback useful for normal album descriptions without guessing track breaks.
 
 ## Automatic Setup
 
 The tool checks for the helper programs it needs and installs missing ones automatically:
 
 - yt-dlp, for downloading from YouTube.
-- FFmpeg, for audio conversion, thumbnail handling, and cover extraction.
+- FFmpeg, for audio conversion, chapter splitting, and cover extraction.
 - Deno, so yt-dlp can use its external JavaScript challenge-solving path when YouTube requires it.
 - Python, for final Opus metadata and album-art tagging.
 
@@ -85,8 +105,8 @@ What each part does:
 
 - **BAT**: Windows double-click entrypoint. Starts everything without requiring the user to open a terminal.
 - **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
-- **yt-dlp**: Downloads the YouTube audio, reads YouTube chapter markers, and splits the upload into separate song files.
-- **FFmpeg**: Media backend for audio extraction, thumbnail conversion, square cover cropping, and stream processing.
+- **yt-dlp**: Downloads the YouTube audio, reads YouTube chapter markers, reads video metadata, and splits the upload into separate song files.
+- **FFmpeg**: Media backend for audio extraction, chapter splitting, square cover cropping, and stream processing.
 - **Python**: Runs only after Python exists. It is used for final metadata cleanup.
 - **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
 - **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
@@ -158,9 +178,10 @@ Artist and album naming is based on the YouTube title. It works best when titles
 
 ```text
 Artist - Album
+Artist - Album (Instrumental Only) - Full EP 2024
 ```
 
-It can also clean up common extra upload text like:
+The dash can be a normal hyphen, en dash, or em dash. The tool can also clean up common extra upload text like:
 
 ```text
 Artist - Album (Instrumental) - Full Album 2024
@@ -185,7 +206,9 @@ If you use the optional AAC conversion, the tool creates `.m4a` files next to th
 
 ## Why It Uses Opus
 
-YouTube's best audio is often already Opus. When the source audio is already Opus, keeping the output as Opus avoids unnecessary re-encoding and keeps file sizes small.
+YouTube's best audio is often already Opus. The tool prefers that stream because keeping source Opus as Opus avoids unnecessary re-encoding and keeps file sizes small.
+
+If a video does not expose an Opus stream, yt-dlp may fall back to the best available audio and convert it to Opus so the rest of the split/tag pipeline stays consistent.
 
 ## Optional AAC Conversion
 
@@ -200,7 +223,7 @@ During conversion, the tool:
 - reads the embedded square Opus cover art directly,
 - writes M4A-native title, artist, album, album artist, track number, and cover art tags,
 - safely replaces any matching `.m4a` from an earlier run,
-- deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully.
+- deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully,
 - cleans up leftover temporary AAC work files from interrupted or older conversion runs.
 
 If conversion fails for a file, the original `.opus` file is kept.
@@ -213,7 +236,7 @@ Most Windows 10 and Windows 11 computers already include `winget`. If yours does
 
 ## Important
 
-This works best with YouTube videos that show chapter markers on the progress bar. If a video has no chapters, the tool keeps the full audio file instead of leaving an empty folder.
+This works best with YouTube videos that have either chapter markers on the progress bar or clear timestamp lines in the description. If neither is available, the tool keeps the full audio file instead of leaving an empty folder.
 
 Use this only for content you own, created, or have permission to download and process.
 
@@ -274,10 +297,11 @@ Each album/upload gets its own subfolder:
 <folder containing the .bat>\YouTube Album Splitter Songs\<album folder>
 ```
 
-Temporary tag helper:
+Temporary tag helpers:
 
 ```text
-%TEMP%\fix_opus_chapter_tags.py
+%TEMP%\fix_opus_chapter_tags.<random>.py
+%TEMP%\fix_m4a_tags.<random>.py
 ```
 
 During processing, a temporary `cover.jpg` may be created inside the album folder. It is removed after album art is embedded.
@@ -314,8 +338,8 @@ winget uninstall --id DenoLand.Deno
 Python packages:
 
 ```powershell
-py -3 -m pip uninstall mutagen
-py -3 -m pip uninstall yt-dlp curl-cffi
+python -m pip uninstall mutagen
+python -m pip uninstall yt-dlp curl-cffi
 ```
 
 ## License
