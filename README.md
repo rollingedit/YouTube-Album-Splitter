@@ -8,9 +8,9 @@ YouTube Album Splitter is a beginner-friendly, no manual setup Windows tool for 
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
-This tool does all of that automatically. The automation behind it is custom-built, then packaged into one double-click `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
+This tool does all of automatically. The automation behind it is custom-built, then packaged into one double-click `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
 
-It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts automatically.
+It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts.
 
 It saves files like:
 
@@ -39,7 +39,7 @@ After a run finishes, songs are saved into a `YouTube Album Splitter Songs` fold
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
 - Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
-- Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
+- Rejects obvious non-YouTube links immediately, instead of wasting time updating tools.
 - Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
 - Prefers YouTube's best available Opus audio.
@@ -97,7 +97,7 @@ The exact package IDs, network destinations, file locations, and uninstall comma
 
 ## How It Works
 
-The released version is one `.bat` file on purpose. A contemporary version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
+The released version is one `.bat` file on purpose. A conventional version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
 
 Conceptually, the tool is still organized in layers:
 
