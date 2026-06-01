@@ -268,8 +268,16 @@ while ($true) {
 
     Write-Host ""
     Write-Host "Preparing tag fixer..."
-    py -3 -c "import mutagen" 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        py -3 -c "import mutagen" 2>$null
+        $mutagenCheckExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($mutagenCheckExitCode -ne 0) {
         py -3 -m pip install --user mutagen
     }
 
