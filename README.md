@@ -94,7 +94,7 @@ What each part does:
 
 yt-dlp handles the initial thumbnail, then the tool re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
 
-If you type `aac` at the prompt, FFmpeg converts existing `.opus` files in the output folder into `.m4a` AAC files. It strips leftover chapter/data streams during conversion so each AAC file behaves like a normal single song, then writes M4A-native tags and square album art. The original Opus files are removed only after the matching AAC file is created successfully.
+If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg converts existing `.opus` files in the output folder into 192 kbps `.m4a` AAC files. It strips leftover chapter/data streams during conversion so each AAC file behaves like a normal single song, then Mutagen writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after the matching AAC file is created and tagged successfully.
 
 So the internal design is modular, but the released user experience stays simple:
 
@@ -116,6 +116,8 @@ If the first download attempt fails, it automatically updates the main download 
 - Deno
 
 If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
+
+If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same update/retry path.
 
 This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If YouTube asks this machine for sign-in or extra verification, the tool also skips the update step because updating will not fix that. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that either, but the tool will still give a readable message instead of silently failing.
 
@@ -195,10 +197,11 @@ During conversion, the tool:
 
 - creates a clean audio-only `.m4a` file,
 - strips leftover chapter/data streams so the file behaves like one normal song,
-- extracts a square cover image from the Opus file,
+- reads the embedded square Opus cover art directly,
 - writes M4A-native title, artist, album, album artist, track number, and cover art tags,
-- replaces any matching `.m4a` from an earlier run,
+- safely replaces any matching `.m4a` from an earlier run,
 - deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully.
+- cleans up leftover temporary AAC work files from interrupted or older conversion runs.
 
 If conversion fails for a file, the original `.opus` file is kept.
 
@@ -320,4 +323,3 @@ py -3 -m pip uninstall yt-dlp curl-cffi
 This project is licensed under the GNU General Public License v3.0.
 
 That means people can use, share, and modify it, but if they distribute modified versions, they must keep the same license and share the source code too.
-
