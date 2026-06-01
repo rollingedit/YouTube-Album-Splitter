@@ -112,11 +112,12 @@ If the first download attempt fails, it automatically updates the main download 
 
 If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
 
-This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that, but the tool will still give a readable message instead of silently failing.
+This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. If the pasted text is obviously not a YouTube link, the tool skips the update step and asks for a real link. If YouTube asks this machine for sign-in or extra verification, the tool also skips the update step because updating will not fix that. If the problem is a private video, age restriction, region lock, or internet issue, updating will not fix that either, but the tool will still give a readable message instead of silently failing.
 
 If the retry still fails, the tool shows a plain-language message with common causes, such as:
 
 - Private, deleted, age-restricted, or region-locked video.
+- YouTube asking this machine for sign-in or extra verification.
 - Playlist or channel link without a specific video selected.
 - Blocked or unstable internet connection.
 - A new YouTube change that needs a future yt-dlp update.
