@@ -75,6 +75,15 @@ function Invoke-YtDlpDownload {
         return
     }
 
+    if ($firstText -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies from browser') {
+        Write-Host ""
+        Write-Host "YouTube is asking this machine to sign in or confirm it is not a bot."
+        Write-Host "Updating the tools will not fix that."
+        Write-Host "Try again later, or try from a different network/browser session."
+        $script:DownloadSucceeded = $false
+        return
+    }
+
     Write-Host ""
     Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
     winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
@@ -247,6 +256,9 @@ while ($true) {
 
     $Cover = Join-Path $OutDir "cover.jpg"
     if ($FullOpus) {
+        # yt-dlp embeds the source thumbnail first. We extract a square cover from
+        # the full Opus and later re-embed it with Mutagen into each split file's
+        # Opus METADATA_BLOCK_PICTURE tag, which music players read reliably.
         cmd /c "ffmpeg -y -i ""$($FullOpus.FullName)"" -map 0:v:0 -frames:v 1 -vf ""crop='min(iw,ih)':'min(iw,ih)'"" -update 1 ""$Cover"" 2>nul"
     }
 
