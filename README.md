@@ -1,10 +1,10 @@
-# YouTube Album Splitter
+﻿# YouTube Album Splitter
 
 One file. Double-click. Paste a YouTube link. Get separate song files.
 
 YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning a chaptered YouTube album upload you own or have permission to use into separate song files automatically.
 
-The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, rename track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
+The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
 This tool does all of that automatically. The automation behind it is custom-built, then packaged into one self-contained `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
 
@@ -198,8 +198,108 @@ Use this only for content you own, created, or have permission to download and p
 
 Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is a normal Windows security limitation for small unsigned projects, not proof that something is wrong. If you trust the file, click **More info** then **Run anyway**.
 
+## Security, Privacy, and System Changes
+
+This project is open source, and the release download is the same plain-text `.bat` script from this repo. The release exists to make downloading easier for beginners.
+
+Because the script can install helper tools automatically, here is exactly what it may change.
+
+### Packages It May Install
+
+Installed through `winget` if missing:
+
+```text
+yt-dlp.yt-dlp
+Gyan.FFmpeg
+Python.Python.3.12
+DenoLand.Deno
+```
+
+Installed through `pip` if missing:
+
+```text
+mutagen
+```
+
+Only during the retry/repair path, if the active `yt-dlp` appears to be a Python-installed version:
+
+```text
+yt-dlp[default]
+curl-cffi
+```
+
+### Network Access
+
+The script may contact:
+
+- YouTube / YouTube Music, through `yt-dlp`, to read video data and download audio.
+- GitHub, when `yt-dlp` downloads its external JavaScript challenge-solving component.
+- Microsoft `winget` package sources, when installing or upgrading dependencies.
+- Python package indexes, when installing `mutagen` or repairing a Python-installed `yt-dlp`.
+
+The script does not upload your files anywhere. It downloads audio from the link you provide and writes the finished files locally.
+
+### Where Files Are Written
+
+Finished songs are written next to the `.bat` file:
+
+```text
+<folder containing the .bat>\YouTube Album Splitter Songs
+```
+
+Each album/upload gets its own subfolder:
+
+```text
+<folder containing the .bat>\YouTube Album Splitter Songs\<album folder>
+```
+
+Temporary tag helper:
+
+```text
+%TEMP%\fix_opus_chapter_tags.py
+```
+
+During processing, a temporary `cover.jpg` may be created inside the album folder. It is removed after album art is embedded.
+
+### PATH Behavior
+
+The script refreshes `PATH` only inside its own running PowerShell window so newly installed tools can be found immediately.
+
+It does not directly edit your permanent system or user `PATH`. However, tools installed through `winget` may add themselves to `PATH` through their normal installers.
+
+### How To Inspect Before Running
+
+The `.bat` file is plain text.
+
+To inspect it before running:
+
+1. Right-click `YouTube Album Splitter.bat`.
+2. Click **Show more options** if needed.
+3. Click **Edit**, or open it with Notepad / VS Code.
+
+The first few lines launch PowerShell. The main script is embedded later in the same file after the `POWERSHELL_PAYLOAD` marker.
+
+### How To Uninstall Helper Tools
+
+Only uninstall these if you installed them for this tool and do not use them for anything else.
+
+```powershell
+winget uninstall --id yt-dlp.yt-dlp
+winget uninstall --id Gyan.FFmpeg
+winget uninstall --id Python.Python.3.12
+winget uninstall --id DenoLand.Deno
+```
+
+Python packages:
+
+```powershell
+py -3 -m pip uninstall mutagen
+py -3 -m pip uninstall yt-dlp curl-cffi
+```
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0.
 
 That means people can use, share, and modify it, but if they distribute modified versions, they must keep the same license and share the source code too.
+
