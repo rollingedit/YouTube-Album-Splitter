@@ -2,11 +2,11 @@
 
 One file. Double-click. Paste a YouTube link. Get separate song files.
 
-YouTube Album Splitter is a beginner-friendly, no-setup, self-contained Windows tool for turning a chaptered YouTube album upload you own or have permission to use into separate song files automatically.
+YouTube Album Splitter is a beginner-friendly, no-setup Windows tool for turning a chaptered YouTube album upload you own or have permission to use into separate song files automatically.
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
-This tool does all of that automatically. The automation behind it is custom-built, then packaged into one self-contained `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
+This tool does all of that automatically. The automation behind it is custom-built, then packaged into one self-contained launcher so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
 
 It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts automatically.
 
@@ -29,13 +29,7 @@ It is designed for album-style YouTube uploads that show chapter markers on the 
 5. Press Enter.
 6. Paste another link to process another upload, or press Enter with no link to close.
 
-Finished songs appear in a folder named:
-
-```text
-YouTube Album Splitter Songs
-```
-
-Each pasted link gets its own subfolder inside that folder, so uploads do not mix together.
+Finished songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together.
 
 ## Features
 
@@ -62,7 +56,7 @@ Each pasted link gets its own subfolder inside that folder, so uploads do not mi
 
 ## Automatic Setup
 
-The tool checks for the helper programs it needs and installs missing ones automatically with `winget`:
+The tool checks for the helper programs it needs and installs missing ones automatically:
 
 - yt-dlp, for downloading from YouTube.
 - FFmpeg, for audio conversion, thumbnail handling, and cover extraction.
@@ -70,6 +64,8 @@ The tool checks for the helper programs it needs and installs missing ones autom
 - Python, for final Opus metadata and album-art tagging.
 
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
+
+Exact package IDs, network destinations, file locations, and uninstall commands are listed in [Security, Privacy, and System Changes](#security-privacy-and-system-changes).
 
 ## How It Works
 
@@ -130,8 +126,7 @@ If the retry still fails, the tool shows a plain-language message with common ca
 Each successful song file is cleaned up like this:
 
 ```text
-Main folder:   YouTube Album Splitter Songs
-Album folder:  Artist - Album
+Folder:        YouTube Album Splitter Songs\Artist - Album
 Filename:      1. Song Name.opus
 Title tag:     Song Name
 Artist tag:    Artist
@@ -141,7 +136,7 @@ Album art:     Embedded
 Genre:         Removed
 ```
 
-The final output folder is kept simple for nontechnical users:
+The folder stays clean after a successful split:
 
 ```text
 YouTube Album Splitter Songs
@@ -150,8 +145,6 @@ YouTube Album Splitter Songs
    ├─ 2. Song Name.opus
    └─ 3. Song Name.opus
 ```
-
-After a successful split, each album folder contains only the finished song files.
 
 Artist and album naming is based on the YouTube title. It works best when titles look like:
 
