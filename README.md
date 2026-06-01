@@ -185,6 +185,23 @@ If you use the optional AAC conversion, the tool creates `.m4a` files next to th
 
 YouTube's best audio is often already Opus. When the source audio is already Opus, keeping the output as Opus avoids unnecessary re-encoding and keeps file sizes small.
 
+## Optional AAC Conversion
+
+Opus is the default because it is usually the best match for YouTube audio. If you need wider compatibility, type `aac` at the prompt after downloading songs.
+
+The AAC converter scans the `YouTube Album Splitter Songs` folder for `.opus` files and turns them into `.m4a` AAC files. This is a real audio conversion, so it can take longer than the normal download/split step.
+
+During conversion, the tool:
+
+- creates a clean audio-only `.m4a` file,
+- strips leftover chapter/data streams so the file behaves like one normal song,
+- extracts a square cover image from the Opus file,
+- writes M4A-native title, artist, album, album artist, track number, and cover art tags,
+- replaces any matching `.m4a` from an earlier run,
+- deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully.
+
+If conversion fails for a file, the original `.opus` file is kept.
+
 ## Requirements
 
 Windows is required.
