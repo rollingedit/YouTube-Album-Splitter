@@ -40,6 +40,182 @@ function Ensure-Command {
     Write-Host "$Name installed."
 }
 
+function Convert-ExistingOpusToAac {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $opusFiles = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.opus" -File -ErrorAction SilentlyContinue
+    if (-not $opusFiles) {
+        Write-Host ""
+        Write-Host "No Opus files found in: $Root"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Converting Opus files to AAC .m4a..."
+    Write-Host "Folder: $Root"
+
+    Write-Host ""
+    Write-Host "Preparing M4A tag fixer..."
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        py -3 -c "import mutagen" 2>$null
+        $mutagenCheckExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($mutagenCheckExitCode -ne 0) {
+        py -3 -m pip install --user mutagen
+    }
+
+    $M4aTagScript = Join-Path $env:TEMP "fix_m4a_tags.py"
+    @'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+from mutagen.mp4 import MP4, MP4Cover
+from mutagen.oggopus import OggOpus
+
+opus_path = Path(sys.argv[1])
+m4a_path = Path(sys.argv[2])
+cover_path = Path(sys.argv[3])
+
+NAME = b"\xa9nam".decode("latin-1")
+ARTIST = b"\xa9ART".decode("latin-1")
+ALBUM = b"\xa9alb".decode("latin-1")
+
+def first(tags, *names):
+    for name in names:
+        value = tags.get(name)
+        if value:
+            if isinstance(value, (list, tuple)):
+                return str(value[0])
+            return str(value)
+    return ""
+
+source = OggOpus(opus_path)
+audio = MP4(m4a_path)
+audio.clear()
+
+title = first(source, "title") or re.sub(r"^\d+\.\s*", "", opus_path.stem).strip()
+artist = first(source, "artist")
+album = first(source, "album")
+album_artist = first(source, "albumartist", "album_artist")
+track_text = first(source, "tracknumber", "track")
+track_match = re.search(r"\d+", track_text)
+
+if title:
+    audio[NAME] = [title]
+if artist:
+    audio[ARTIST] = [artist]
+if album:
+    audio[ALBUM] = [album]
+if album_artist:
+    audio["aART"] = [album_artist]
+if track_match:
+    audio["trkn"] = [(int(track_match.group(0)), 0)]
+if cover_path.is_file():
+    audio["covr"] = [MP4Cover(cover_path.read_bytes(), imageformat=MP4Cover.FORMAT_JPEG)]
+
+audio.save()
+'@ | Set-Content -LiteralPath $M4aTagScript -Encoding UTF8
+
+    $converted = 0
+    $replaced = 0
+    $failed = 0
+    $deleted = 0
+
+    foreach ($opus in $opusFiles) {
+        $aacPath = [System.IO.Path]::ChangeExtension($opus.FullName, ".m4a")
+        $tempAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".tmp.m4a")
+        $tempCoverPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".cover.tmp.jpg")
+        if (Test-Path -LiteralPath $aacPath) {
+            Write-Host "Replacing existing AAC: $([System.IO.Path]::GetFileName($aacPath))"
+            Remove-Item -LiteralPath $aacPath -Force
+            $replaced++
+        }
+
+        if (Test-Path -LiteralPath $tempAacPath) {
+            Remove-Item -LiteralPath $tempAacPath -Force
+        }
+        if (Test-Path -LiteralPath $tempCoverPath) {
+            Remove-Item -LiteralPath $tempCoverPath -Force
+        }
+
+        Write-Host "Converting: $($opus.Name)"
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $ffmpegOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 256k $tempAacPath 2>&1
+            $ffmpegExitCode = $LASTEXITCODE
+            $coverOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:v:0" -frames:v 1 -vf "crop='min(iw,ih)':'min(iw,ih)'" -update 1 $tempCoverPath 2>&1
+            $coverExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        $tempAacFile = Get-Item -LiteralPath $tempAacPath -ErrorAction SilentlyContinue
+        if ($ffmpegExitCode -eq 0 -and $tempAacFile -and $tempAacFile.Length -gt 0) {
+            $tempCoverFile = Get-Item -LiteralPath $tempCoverPath -ErrorAction SilentlyContinue
+
+            if ($coverExitCode -ne 0 -or -not $tempCoverFile -or $tempCoverFile.Length -le 0) {
+                Write-Host "Warning: could not extract album art for AAC from $($opus.Name). Keeping audio-only AAC."
+            }
+
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $tagOutput = & py -3 "$M4aTagScript" "$($opus.FullName)" "$tempAacPath" "$tempCoverPath" 2>&1
+                $tagExitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+
+            if ($tagExitCode -ne 0) {
+                $failed++
+                if (Test-Path -LiteralPath $tempAacPath) {
+                    Remove-Item -LiteralPath $tempAacPath -Force
+                }
+                if (Test-Path -LiteralPath $tempCoverPath) {
+                    Remove-Item -LiteralPath $tempCoverPath -Force
+                }
+                Write-Host "Could not tag AAC file: $($opus.Name)"
+                Write-Host "Kept original Opus file."
+                $tagOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+                continue
+            }
+
+            Move-Item -LiteralPath $tempAacPath -Destination $aacPath -Force
+            if (Test-Path -LiteralPath $tempCoverPath) {
+                Remove-Item -LiteralPath $tempCoverPath -Force
+            }
+            Remove-Item -LiteralPath $opus.FullName -Force
+            $converted++
+            $deleted++
+            continue
+        }
+
+        $failed++
+        if (Test-Path -LiteralPath $tempAacPath) {
+            Remove-Item -LiteralPath $tempAacPath -Force
+        }
+        if (Test-Path -LiteralPath $tempCoverPath) {
+            Remove-Item -LiteralPath $tempCoverPath -Force
+        }
+        Write-Host "Could not convert: $($opus.Name)"
+        Write-Host "Kept original Opus file."
+        $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+    }
+
+    Write-Host ""
+    Write-Host "AAC conversion finished. Converted: $converted. Replaced existing AAC: $replaced. Failed: $failed."
+    Write-Host "Removed Opus originals after successful AAC conversion: $deleted."
+}
+
 function Invoke-YtDlpDownload {
     $ytDlpArgs = @(
         "--force-overwrites",
@@ -189,12 +365,20 @@ New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
 while ($true) {
     Write-Host ""
     Write-Host "Paste a YouTube album link, then press Enter."
+    Write-Host "Type aac to convert existing Opus files to AAC .m4a."
     Write-Host "Press Enter with no link to close."
     Write-Host ""
 
     $Url = Read-Host "YouTube URL"
     if ([string]::IsNullOrWhiteSpace($Url)) {
         break
+    }
+
+    if ($Url.Trim() -ieq "aac") {
+        Convert-ExistingOpusToAac -Root $DownloadsRoot
+        Write-Host ""
+        Write-Host "Paste another link, type aac again, or press Enter with no link to close."
+        continue
     }
 
     if ($Url -notmatch '^https?://((www|m|music)\.)?(youtube\.com|youtu\.be)/') {
