@@ -14,6 +14,122 @@ exit /b %ERR%
 # POWERSHELL_PAYLOAD
 $ErrorActionPreference = "Stop"
 
+function Get-TableFlipText {
+    return '(' + [char]0x256F + [char]0x00B0 + [char]0x25A1 + [char]0x00B0 + ')' + [char]0x256F + [char]0xFE35 + ' ' + [char]0x253B + [char]0x2501 + [char]0x253B
+}
+
+function Write-Mascot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Face,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    Write-Host "$Face $Message"
+}
+
+function Get-YouTubeVideoIdFromUrl {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    try {
+        $uri = [Uri]$Url
+    } catch {
+        return ""
+    }
+
+    if ($uri.Host -match '(^|\.)youtu\.be$') {
+        return $uri.AbsolutePath.Trim('/').Split('/')[0]
+    }
+
+    if ($uri.AbsolutePath -match '^/(shorts|live|embed)/([^/?#]+)') {
+        return $Matches[2]
+    }
+
+    $queryMatch = [regex]::Match($uri.Query, '(?:^\?|&)v=([^&]+)')
+    if ($queryMatch.Success) {
+        return [Uri]::UnescapeDataString($queryMatch.Groups[1].Value)
+    }
+
+    return ""
+}
+
+function Test-YouTubeVideoIdLooksIncomplete {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $videoId = Get-YouTubeVideoIdFromUrl -Url $Url
+    return (-not [string]::IsNullOrWhiteSpace($videoId)) -and ($videoId -notmatch '^[A-Za-z0-9_-]{11}$')
+}
+
+function Invoke-WithMascotStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @(),
+        [string]$ProgressText = ""
+    )
+
+    $faces = @(
+        ' (o_o) ',
+        ' (o_o) ',
+        ' (-_-) ',
+        ' (o_o) ',
+        '( o_-) ',
+        ' (o_o) ',
+        ' (-_o )',
+        ' (o_o) '
+    )
+    $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
+    $i = 0
+    $lastLineLength = 0
+
+    try {
+        while ($job.State -eq "Running") {
+            try {
+                $width = [Console]::WindowWidth
+            } catch {
+                $width = 80
+            }
+            $maxLineLength = [Math]::Max(20, $width - 1)
+            $face = $faces[$i % $faces.Count]
+            $dots = "." * (($i % 4) + 1)
+            $dotField = $dots.PadRight(4)
+            $progressSuffix = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "   $ProgressText" }
+            $prefix = "{0} " -f $face
+            $reservedLength = $prefix.Length + $dotField.Length + $progressSuffix.Length
+            $messageLimit = [Math]::Max(8, $maxLineLength - $reservedLength)
+            $displayMessage = $Message
+            if ($displayMessage.Length -gt $messageLimit) {
+                $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 4)).TrimEnd() + "... "
+            }
+            $line = "{0}{1}{2}{3}" -f $prefix, $displayMessage, $dotField, $progressSuffix
+            if ($line.Length -gt $maxLineLength) {
+                $line = $line.Substring(0, $maxLineLength)
+            }
+            $padLength = if ($lastLineLength -gt $line.Length) { $lastLineLength - $line.Length } else { 0 }
+            $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $line.Length))
+            $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
+            Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
+            $lastLineLength = [Math]::Max($lastLineLength, $line.Length)
+            Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
+            $i++
+        }
+
+        try {
+            $width = [Console]::WindowWidth
+        } catch {
+            $width = 80
+        }
+        Write-Host -NoNewline ("`r{0}`r" -f (' ' * ([Math]::Min($width - 1, $lastLineLength + 1))))
+
+        $result = Receive-Job -Job $job
+        if ($job.State -eq "Failed") {
+            throw ($job.ChildJobs[0].JobStateInfo.Reason)
+        }
+        return $result
+    } finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Refresh-Path {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -146,7 +262,7 @@ function Convert-ExistingOpusToAac {
     $opusFiles = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.opus" -File -ErrorAction SilentlyContinue
     if (-not $opusFiles) {
         Write-Host ""
-        Write-Host "No Opus files found in: $Root"
+        Write-Mascot "(._.)" "No Opus files found in: $Root"
         Remove-StaleAacWorkFiles -Root $Root
         return
     }
@@ -161,7 +277,7 @@ function Convert-ExistingOpusToAac {
     Write-Host "This will convert them to AAC .m4a and remove each Opus original after successful conversion."
     $confirmAac = Read-Host "Continue? Type yes to continue"
     if ($confirmAac.Trim() -ine "yes") {
-        Write-Host "AAC conversion cancelled."
+        Write-Mascot "(u_u)" "AAC conversion cancelled."
         return
     }
 
@@ -255,8 +371,10 @@ audio.save()
     $replaced = 0
     $failed = 0
     $deleted = 0
+    $aacIndex = 0
 
     foreach ($opus in $opusFiles) {
+        $aacIndex++
         $aacPath = [System.IO.Path]::ChangeExtension($opus.FullName, ".m4a")
         $aacWorkId = [guid]::NewGuid().ToString("N")
         $tempAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".$aacWorkId.tmp.m4a")
@@ -269,12 +387,19 @@ audio.save()
             $replaced++
         }
 
-        Write-Host "Converting: $($opus.Name)"
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $tempAacPath 2>&1
-            $ffmpegExitCode = $LASTEXITCODE
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText "($aacIndex/$($opusFiles.Count))" -ScriptBlock {
+                param([string]$InputPath, [string]$OutputPath)
+                $output = & ffmpeg -hide_banner -y -i $InputPath -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $OutputPath 2>&1
+                [pscustomobject]@{
+                    Output = @($output)
+                    ExitCode = $LASTEXITCODE
+                }
+            } -ArgumentList @($opus.FullName, $tempAacPath)
+            $ffmpegOutput = @($ffmpegResult.Output)
+            $ffmpegExitCode = $ffmpegResult.ExitCode
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
@@ -298,7 +423,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Write-Host "Could not tag AAC file: $($opus.Name)"
+                Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)"
                 Write-Host "Kept original Opus file."
                 $tagOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
                 continue
@@ -323,7 +448,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Write-Host "Could not finalize AAC file: $($opus.Name)"
+                Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)"
                 Write-Host "Kept original Opus file."
             }
             continue
@@ -336,7 +461,7 @@ audio.save()
         if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
             Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
         }
-        Write-Host "Could not convert: $($opus.Name)"
+        Write-Mascot "(>_<)" "Could not convert: $($opus.Name)"
         Write-Host "Kept original Opus file."
         $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
     }
@@ -350,47 +475,259 @@ audio.save()
     Remove-StaleAacWorkFiles -Root $Root
 }
 
-function Invoke-YtDlpDownload {
-    $ytDlpArgs = @(
-        "--force-overwrites",
-        "--no-playlist",
-        "--remote-components", "ejs:github",
-        "-P", $OutDir,
-        "-f", "ba[acodec^=opus]/ba",
-        "-x",
-        "--audio-format", "opus",
-        "--split-chapters",
-        "--embed-metadata",
-        "--embed-thumbnail",
-        "--convert-thumbnails", "jpg",
-        "--ppa", "SplitChapters+ffmpeg_o:-vn",
-        "-o", "chapter:%(section_number)d. %(section_title)s.%(ext)s",
-        $Url
+function Write-YtDlpFailureIfNonRetryable {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    if ($Text -match 'is not a valid URL|Unsupported URL|Invalid URL') {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "That does not look like a valid YouTube video link."
+        Write-Host "Copy the full link from YouTube and try again."
+        return $true
+    }
+
+    if ($Text -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies from browser') {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "YouTube is asking this machine to sign in or confirm it is not a bot."
+        Write-Host "Updating the tools will not fix that."
+        Write-Host "Try again later, or try from a different network/browser session."
+        return $true
+    }
+
+    if ($Text -match 'Incomplete YouTube ID|Video unavailable|This video is unavailable|This video isn.?t available|This video has been removed|Private video|Video not available|Video not found|HTTP Error 404|HTTP Error 410') {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "YouTube could not find or play that video."
+        Write-Host "Updating the tools will not fix a missing, private, deleted, or incomplete video link."
+        Write-Host "Double-check the pasted link and try again."
+        return $true
+    }
+
+    return $false
+}
+
+function ConvertTo-ProcessArgument {
+    param([Parameter(Mandatory = $true)][string]$Argument)
+
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    # Quote for CommandLineToArgvW: double any backslash run that precedes a quote
+    # or the closing quote, and escape embedded quotes. This keeps paths with spaces
+    # and YouTube URLs intact when the argument is passed to a directly launched exe.
+    $escaped = $Argument -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
+    return '"' + $escaped + '"'
+}
+
+function Get-LastDownloadPercent {
+    param([string]$Text)
+
+    $matches = [regex]::Matches($Text, '\[download\]\s+([0-9]+(?:\.[0-9]+)?)%')
+    if ($matches.Count -eq 0) {
+        return $null
+    }
+
+    return [double]$matches[$matches.Count - 1].Groups[1].Value
+}
+
+function Get-EstimatedTrackProgressText {
+    param(
+        [object]$Percent,
+        [int]$TrackCount
     )
 
-    $firstOutput = & yt-dlp @ytDlpArgs 2>&1
-    $firstOutput | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -eq 0) {
-        $script:DownloadSucceeded = $true
-        return
+    if ($TrackCount -lt 2 -or $null -eq $Percent) {
+        return ""
+    }
+
+    $percentValue = [double]$Percent
+
+    $estimate = [int][Math]::Floor(($percentValue / 100.0) * $TrackCount) + 1
+    if ($estimate -lt 1) {
+        $estimate = 1
+    }
+    if ($estimate -gt $TrackCount) {
+        $estimate = $TrackCount
+    }
+
+    return "~($estimate/$TrackCount)"
+}
+
+function Write-MascotStatusLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Face,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$DotField,
+        [string]$ProgressText = "",
+        [Parameter(Mandatory = $true)][ref]$LastLineLength
+    )
+
+    try {
+        $width = [Console]::WindowWidth
+    } catch {
+        $width = 80
+    }
+    $maxLineLength = [Math]::Max(20, $width - 1)
+    $progressSuffix = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "   $ProgressText" }
+    $prefix = "{0} " -f $Face
+    $reservedLength = $prefix.Length + $DotField.Length + $progressSuffix.Length
+    $messageLimit = [Math]::Max(8, $maxLineLength - $reservedLength)
+    $displayMessage = $Message
+    if ($displayMessage.Length -gt $messageLimit) {
+        $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 4)).TrimEnd() + "... "
+    }
+
+    $line = "{0}{1}{2}{3}" -f $prefix, $displayMessage, $DotField, $progressSuffix
+    if ($line.Length -gt $maxLineLength) {
+        $line = $line.Substring(0, $maxLineLength)
+    }
+    $padLength = if ($LastLineLength.Value -gt $line.Length) { $LastLineLength.Value - $line.Length } else { 0 }
+    $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $line.Length))
+    $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
+    Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
+    $LastLineLength.Value = [Math]::Max($LastLineLength.Value, $line.Length)
+}
+
+function Clear-MascotStatusLine {
+    param([int]$LastLineLength)
+
+    try {
+        $width = [Console]::WindowWidth
+    } catch {
+        $width = 80
+    }
+    Write-Host -NoNewline ("`r{0}`r" -f (' ' * ([Math]::Min($width - 1, $LastLineLength + 1))))
+}
+
+function Invoke-YtDlpDownloadProcess {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$YtDlpArgs,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [int]$TrackCount = 0
+    )
+
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if (-not $ytDlpCommand) {
+        throw "yt-dlp is not available."
+    }
+
+    $faces = @(
+        ' (o_o) ',
+        ' (o_o) ',
+        ' (-_-) ',
+        ' (o_o) ',
+        '( o_-) ',
+        ' (o_o) ',
+        ' (-_o )',
+        ' (o_o) '
+    )
+    $lastLineLength = 0
+    $i = 0
+    $process = $null
+    $stdoutSub = $null
+    $stderrSub = $null
+    $captured = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+
+    try {
+        # Launch yt-dlp directly, with no cmd.exe shell in between, so URL characters
+        # like & ? ^ and the %(...)s output template are passed through literally and
+        # paths with spaces stay intact. Output is captured asynchronously so the
+        # status animation can still show live download progress.
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $ytDlpCommand.Source
+        $startInfo.Arguments = ($YtDlpArgs | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join " "
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+
+        $onData = {
+            if ($null -ne $EventArgs.Data) {
+                [void]$Event.MessageData.Add($EventArgs.Data)
+            }
+        }
+        $stdoutSub = Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -Action $onData -MessageData $captured
+        $stderrSub = Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -Action $onData -MessageData $captured
+
+        [void]$process.Start()
+        $process.BeginOutputReadLine()
+        $process.BeginErrorReadLine()
+
+        while (-not $process.HasExited) {
+            $text = ($captured.ToArray() -join "`n")
+            $percent = Get-LastDownloadPercent -Text $text
+            $progressText = Get-EstimatedTrackProgressText -Percent $percent -TrackCount $TrackCount
+            $face = $faces[$i % $faces.Count]
+            $dots = "." * (($i % 4) + 1)
+            Write-MascotStatusLine -Face $face -Message $Message -DotField $dots.PadRight(4) -ProgressText $progressText -LastLineLength ([ref]$lastLineLength)
+            Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
+            $i++
+        }
+
+        # No-argument WaitForExit flushes the redirected output streams; the short
+        # pause lets the PowerShell event handlers drain the last queued lines.
+        $process.WaitForExit()
+        Start-Sleep -Milliseconds 200
+        Clear-MascotStatusLine -LastLineLength $lastLineLength
+
+        $output = @($captured.ToArray() | Where-Object { $_ -ne "" })
+
+        return [pscustomobject]@{
+            Output = @($output)
+            ExitCode = $process.ExitCode
+        }
+    } finally {
+        if ($process -and -not $process.HasExited) {
+            $process.Kill()
+        }
+        if ($stdoutSub) {
+            Unregister-Event -SourceIdentifier $stdoutSub.Name -ErrorAction SilentlyContinue
+            Remove-Job -Name $stdoutSub.Name -Force -ErrorAction SilentlyContinue
+        }
+        if ($stderrSub) {
+            Unregister-Event -SourceIdentifier $stderrSub.Name -ErrorAction SilentlyContinue
+            Remove-Job -Name $stderrSub.Name -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Invoke-YtDlpWithRecovery {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$YtDlpArgs,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$RetryMessage,
+        [bool]$EchoOutput = $true,
+        [string]$ProgressText = ""
+    )
+
+    $firstResult = Invoke-WithMascotStatus -Message $Message -ProgressText $ProgressText -ScriptBlock {
+        param([object[]]$ArgsForYtDlp)
+        $output = & yt-dlp @ArgsForYtDlp 2>&1
+        [pscustomobject]@{
+            Output = @($output)
+            ExitCode = $LASTEXITCODE
+        }
+    } -ArgumentList (,$YtDlpArgs)
+    $firstOutput = @($firstResult.Output)
+    if ($EchoOutput) {
+        $firstOutput | ForEach-Object { Write-Host $_ }
+    }
+    if ($firstResult.ExitCode -eq 0) {
+        return [pscustomobject]@{
+            Succeeded = $true
+            Output = $firstOutput
+        }
     }
 
     $firstText = $firstOutput -join "`n"
-    if ($firstText -match 'is not a valid URL|Unsupported URL|Invalid URL') {
-        Write-Host ""
-        Write-Host "That does not look like a valid YouTube video link."
-        Write-Host "Copy the full link from YouTube and try again."
-        $script:DownloadSucceeded = $false
-        return
-    }
-
-    if ($firstText -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies from browser') {
-        Write-Host ""
-        Write-Host "YouTube is asking this machine to sign in or confirm it is not a bot."
-        Write-Host "Updating the tools will not fix that."
-        Write-Host "Try again later, or try from a different network/browser session."
-        $script:DownloadSucceeded = $false
-        return
+    if (Write-YtDlpFailureIfNonRetryable -Text $firstText) {
+        return [pscustomobject]@{
+            Succeeded = $false
+            Output = $firstOutput
+        }
     }
 
     Write-Host ""
@@ -411,11 +748,29 @@ function Invoke-YtDlpDownload {
 
     Refresh-Path
 
-    $retryOutput = & yt-dlp @ytDlpArgs 2>&1
-    $retryOutput | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
+    $retryResult = Invoke-WithMascotStatus -Message $RetryMessage -ProgressText $ProgressText -ScriptBlock {
+        param([object[]]$ArgsForYtDlp)
+        $output = & yt-dlp @ArgsForYtDlp 2>&1
+        [pscustomobject]@{
+            Output = @($output)
+            ExitCode = $LASTEXITCODE
+        }
+    } -ArgumentList (,$YtDlpArgs)
+    $retryOutput = @($retryResult.Output)
+    if ($EchoOutput) {
+        $retryOutput | ForEach-Object { Write-Host $_ }
+    }
+    if ($retryResult.ExitCode -ne 0) {
+        $retryText = $retryOutput -join "`n"
+        if (Write-YtDlpFailureIfNonRetryable -Text $retryText) {
+            return [pscustomobject]@{
+                Succeeded = $false
+                Output = $retryOutput
+            }
+        }
+
         Write-Host ""
-        Write-Host "Still couldn't download after updating the tools."
+        Write-Mascot "(x_x)" "Still couldn't download after updating the tools."
         Write-Host "Common causes:"
         Write-Host "- The link is private, age-restricted, deleted, or region-locked."
         Write-Host "- The link is a playlist/channel instead of one video."
@@ -424,39 +779,121 @@ function Invoke-YtDlpDownload {
         Write-Host ""
         Write-Host "Double-check the link and try again."
         Write-Host ""
-        $script:DownloadSucceeded = $false
-        return
+        return [pscustomobject]@{
+            Succeeded = $false
+            Output = $retryOutput
+        }
     }
 
-    $script:DownloadSucceeded = $true
+    return [pscustomobject]@{
+        Succeeded = $true
+        Output = $retryOutput
+    }
+}
+
+function Get-YtDlpMetadata {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $metadataArgs = @(
+        "--skip-download",
+        "--dump-single-json",
+        "--no-warnings",
+        "--no-playlist",
+        "--remote-components", "ejs:github",
+        $Url
+    )
+
+    $metadataResult = Invoke-YtDlpWithRecovery -YtDlpArgs $metadataArgs -Message "Reading video track info" -RetryMessage "Reading video track info again" -EchoOutput $false
+    if (-not $metadataResult.Succeeded) {
+        return $null
+    }
+
+    try {
+        return (($metadataResult.Output -join "`n") | ConvertFrom-Json)
+    } catch {
+        Write-Mascot "(u_u)" "Could not parse video metadata."
+        return $null
+    }
+}
+
+function Invoke-YtDlpDownloadFullAudio {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutDir,
+        [int]$TrackCount = 0
+    )
+
+    $downloadArgs = @(
+        "--force-overwrites",
+        "--no-playlist",
+        "--newline",
+        "--remote-components", "ejs:github",
+        "-P", $OutDir,
+        "-f", "ba[acodec^=opus]/ba",
+        "-x",
+        "--audio-format", "opus",
+        "--embed-metadata",
+        "--embed-thumbnail",
+        "--convert-thumbnails", "jpg",
+        "-o", "%(title)s [%(id)s].%(ext)s",
+        $Url
+    )
+
+    $firstResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $downloadArgs -Message "Downloading album audio" -TrackCount $TrackCount
+    if ($firstResult.ExitCode -eq 0) {
+        return $true
+    }
+
+    $firstText = (@($firstResult.Output) -join "`n")
+    if (Write-YtDlpFailureIfNonRetryable -Text $firstText) {
+        return $false
+    }
+
+    Write-Host ""
+    if ($firstText -match 'no such option') {
+        Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+    } else {
+        Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+    }
+    winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
+    winget upgrade --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
+    winget upgrade --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
+
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
+        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
+    }
+
+    Refresh-Path
+
+    $retryResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $downloadArgs -Message "Trying the download again" -TrackCount $TrackCount
+    if ($retryResult.ExitCode -eq 0) {
+        return $true
+    }
+
+    $retryText = (@($retryResult.Output) -join "`n")
+    if (Write-YtDlpFailureIfNonRetryable -Text $retryText) {
+        return $false
+    }
+
+    Write-Host ""
+    Write-Mascot "(x_x)" "Still couldn't download after updating the tools."
+    Write-Host "Common causes:"
+    Write-Host "- The link is private, age-restricted, deleted, or region-locked."
+    Write-Host "- The link is a playlist/channel instead of one video."
+    Write-Host "- The internet connection is blocked or unstable."
+    Write-Host "- YouTube changed something and yt-dlp needs another update later."
+    Write-Host ""
+    Write-Host "Double-check the link and try again."
+    Write-Host ""
+    return $false
 }
 
 function Get-DescriptionTimestampChapters {
-    param([Parameter(Mandatory = $true)][string]$Url)
+    param([Parameter(Mandatory = $true)]$Metadata)
 
-    Write-Host "Checking video description for timestamped tracks..."
-
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $metadataOutput = & yt-dlp --skip-download --dump-single-json --no-warnings --no-playlist --remote-components "ejs:github" $Url 2>$null
-        $metadataExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
-
-    if ($metadataExitCode -ne 0) {
-        Write-Host "Could not read video description for timestamp fallback."
-        return @()
-    }
-
-    try {
-        $metadata = ($metadataOutput -join "`n") | ConvertFrom-Json
-    } catch {
-        Write-Host "Could not parse video metadata for timestamp fallback."
-        return @()
-    }
-
+    $metadata = $Metadata
     if ([string]::IsNullOrWhiteSpace($metadata.description) -or -not $metadata.duration) {
         return @()
     }
@@ -500,7 +937,7 @@ function Get-DescriptionTimestampChapters {
     }
 
     if ($chapters[0].StartTime -ne 0) {
-        Write-Host "Timestamp fallback skipped because the first timestamp is not 0:00."
+        Write-Mascot "(._.)" "Timestamp fallback skipped because the first timestamp is not 0:00."
         return @()
     }
 
@@ -536,11 +973,72 @@ function Get-DescriptionTimestampChapters {
     return $result
 }
 
-function Invoke-DescriptionTimestampFallback {
+function Get-YouTubeChapterTracks {
+    param([Parameter(Mandatory = $true)]$Metadata)
+
+    if (-not $Metadata.chapters -or -not $Metadata.duration) {
+        return @()
+    }
+
+    $duration = [double]$Metadata.duration
+    $sourceChapters = @($Metadata.chapters)
+    if ($sourceChapters.Count -lt 2) {
+        return @()
+    }
+
+    $tracks = @()
+    for ($i = 0; $i -lt $sourceChapters.Count; $i++) {
+        $chapter = $sourceChapters[$i]
+        if ($null -eq $chapter.start_time) {
+            return @()
+        }
+
+        $startTime = [double]$chapter.start_time
+        if ($startTime -lt 0 -or $startTime -ge $duration) {
+            return @()
+        }
+
+        if ($i -gt 0 -and $startTime -le [double]$sourceChapters[$i - 1].start_time) {
+            return @()
+        }
+
+        $endTime = if ($i + 1 -lt $sourceChapters.Count) {
+            [double]$sourceChapters[$i + 1].start_time
+        } elseif ($null -ne $chapter.end_time) {
+            [double]$chapter.end_time
+        } else {
+            $duration
+        }
+
+        if ($endTime -gt $duration) {
+            $endTime = $duration
+        }
+
+        if ($endTime -le $startTime) {
+            return @()
+        }
+
+        $title = [string]$chapter.title
+        if ([string]::IsNullOrWhiteSpace($title)) {
+            $title = "Track " + ($i + 1)
+        }
+
+        $tracks += [pscustomobject]@{
+            StartTime = $startTime
+            EndTime = [double]$endTime
+            Title = $title.Trim()
+        }
+    }
+
+    return $tracks
+}
+
+function Invoke-KnownTrackSplit {
     param(
-        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][object[]]$Tracks,
         [Parameter(Mandatory = $true)][string]$OutDir,
-        [Parameter(Mandatory = $true)][string]$FullOpusPath
+        [Parameter(Mandatory = $true)][string]$FullOpusPath,
+        [Parameter(Mandatory = $true)][string]$SourceName
     )
 
     $existingSongs = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
@@ -550,22 +1048,21 @@ function Invoke-DescriptionTimestampFallback {
         return $false
     }
 
-    $chapters = @(Get-DescriptionTimestampChapters -Url $Url)
-    if ($chapters.Count -lt 2) {
-        Write-Host "No usable description timestamps were found."
+    $tracks = @($Tracks)
+    if ($tracks.Count -lt 2) {
         return $false
     }
 
-    Write-Host "Found $($chapters.Count) timestamped track(s) in the description. Splitting from those timestamps..."
+    Write-Host "Splitting $($tracks.Count) track(s) from $SourceName..."
 
     $createdFiles = @()
-    for ($i = 0; $i -lt $chapters.Count; $i++) {
+    for ($i = 0; $i -lt $tracks.Count; $i++) {
         $trackNumber = $i + 1
-        $trackTitle = $chapters[$i].Title
+        $trackTitle = $tracks[$i].Title
         $safeTitle = Get-SafeName $trackTitle
         $outputPath = Join-Path $OutDir ("$trackNumber. $safeTitle.opus")
-        $startSeconds = $chapters[$i].StartTime
-        $durationSeconds = [Math]::Max(0.001, $chapters[$i].EndTime - $chapters[$i].StartTime)
+        $startSeconds = $tracks[$i].StartTime
+        $durationSeconds = [Math]::Max(0.001, $tracks[$i].EndTime - $tracks[$i].StartTime)
 
         if (Test-Path -LiteralPath $outputPath) {
             Remove-Item -LiteralPath $outputPath -Force
@@ -574,15 +1071,28 @@ function Invoke-DescriptionTimestampFallback {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegOutput = & ffmpeg -hide_banner -y -ss $startSeconds -i $FullOpusPath -t $durationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $outputPath 2>&1
-            $ffmpegExitCode = $LASTEXITCODE
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Splitting track: $trackTitle" -ProgressText "($trackNumber/$($tracks.Count))" -ScriptBlock {
+                param(
+                    [double]$StartSeconds,
+                    [string]$InputPath,
+                    [double]$DurationSeconds,
+                    [string]$OutputPath
+                )
+                $output = & ffmpeg -hide_banner -y -ss $StartSeconds -i $InputPath -t $DurationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $OutputPath 2>&1
+                [pscustomobject]@{
+                    Output = @($output)
+                    ExitCode = $LASTEXITCODE
+                }
+            } -ArgumentList @($startSeconds, $FullOpusPath, $durationSeconds, $outputPath)
+            $ffmpegOutput = @($ffmpegResult.Output)
+            $ffmpegExitCode = $ffmpegResult.ExitCode
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
         $createdFile = Get-Item -LiteralPath $outputPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -ne 0 -or -not $createdFile -or $createdFile.Length -le 0) {
-            Write-Host "Timestamp fallback could not split: $trackTitle"
+            Write-Mascot "(>_<)" "Could not split track: $trackTitle"
             $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
             foreach ($file in $createdFiles) {
                 if (Test-Path -LiteralPath $file) {
@@ -598,7 +1108,7 @@ function Invoke-DescriptionTimestampFallback {
         $createdFiles += $outputPath
     }
 
-    Write-Host "Timestamp fallback created $($createdFiles.Count) track file(s)."
+    Write-Host "Created $($createdFiles.Count) track file(s)."
     return $true
 }
 
@@ -691,7 +1201,14 @@ while ($true) {
 
     if ($Url -notmatch '^https?://((www|m|music)\.)?(youtube\.com|youtu\.be)/') {
         Write-Host ""
-        Write-Host "That does not look like a YouTube link."
+        Write-Mascot "(o_o?)" "That does not look like a YouTube link."
+        Write-Host "Copy the full YouTube video link and try again."
+        continue
+    }
+
+    if (Test-YouTubeVideoIdLooksIncomplete -Url $Url) {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "That YouTube video ID looks incomplete."
         Write-Host "Copy the full YouTube video link and try again."
         continue
     }
@@ -701,11 +1218,39 @@ while ($true) {
         New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
         Write-Host ""
-        Write-Host "Downloading and splitting songs..."
+        Write-Host "Reading track info..."
 
-        $script:DownloadSucceeded = $false
-        Invoke-YtDlpDownload
-        if (-not $script:DownloadSucceeded) {
+        $Metadata = Get-YtDlpMetadata -Url $Url
+        if (-not $Metadata) {
+            if ((Test-Path -LiteralPath $OutDir) -and -not (Get-ChildItem -LiteralPath $OutDir -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath $OutDir -Force
+            }
+            Write-Host ""
+            Write-Host "Paste another link to try again, or press Enter with no link to close."
+            continue
+        }
+
+        $TrackSource = ""
+        $TrackList = @(Get-YouTubeChapterTracks -Metadata $Metadata)
+        if ($TrackList.Count -ge 2) {
+            $TrackSource = "YouTube chapter markers"
+            Write-Host "Found $($TrackList.Count) YouTube chapter track(s)."
+        } else {
+            Write-Host "No usable YouTube chapter markers were found. Checking description timestamps..."
+            $TrackList = @(Get-DescriptionTimestampChapters -Metadata $Metadata)
+            if ($TrackList.Count -ge 2) {
+                $TrackSource = "description timestamps"
+                Write-Host "Found $($TrackList.Count) timestamped track(s) in the description."
+            } else {
+                Write-Mascot "(._.)" "No usable description timestamps were found."
+            }
+        }
+
+        Write-Host ""
+        Write-Host "Downloading album audio..."
+
+        $DownloadSucceeded = Invoke-YtDlpDownloadFullAudio -Url $Url -OutDir $OutDir -TrackCount $TrackList.Count
+        if (-not $DownloadSucceeded) {
             if ((Test-Path -LiteralPath $OutDir) -and -not (Get-ChildItem -LiteralPath $OutDir -Force -ErrorAction SilentlyContinue)) {
                 Remove-Item -LiteralPath $OutDir -Force
             }
@@ -761,17 +1306,12 @@ while ($true) {
     }
 
     if (-not (Test-Path -LiteralPath $Cover)) {
-        Write-Host "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
+        Write-Mascot "(u_u)" "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
     }
 
-    $NativeSongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^\d+\. ' } |
-        Measure-Object).Count
-
-    if ($NativeSongCount -eq 0 -and $FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+    if ($TrackList.Count -ge 2 -and $FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
         Write-Host ""
-        Write-Host "No YouTube chapter split files were created. Trying description timestamps..."
-        Invoke-DescriptionTimestampFallback -Url $Url -OutDir $OutDir -FullOpusPath $FullOpus.FullName | Out-Null
+        Invoke-KnownTrackSplit -Tracks $TrackList -OutDir $OutDir -FullOpusPath $FullOpus.FullName -SourceName $TrackSource | Out-Null
     }
 
     Write-Host ""
@@ -863,7 +1403,7 @@ for path in sorted(chapter_dir.glob("*.opus")):
     if ($tagExitCode -eq 0) {
         $tagOutput | ForEach-Object { Write-Host $_ }
     } else {
-        Write-Host "Tag fixer failed. Keeping the full-length Opus file if it still exists."
+        Write-Mascot "(;_;)" "Tag fixer failed. Keeping the full-length Opus file if it still exists."
         $tagOutput | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
     }
 
@@ -883,24 +1423,24 @@ for path in sorted(chapter_dir.glob("*.opus")):
         if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
             Remove-Item -LiteralPath $FullOpus.FullName -Force
         } elseif ($SongCount -gt 0) {
-            Write-Host "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too."
+            Write-Mascot "(;_;)" "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too."
         } else {
-            Write-Host "No separate song files were created. Keeping the full-length Opus file."
+            Write-Mascot "(._.)" "No separate song files were created. Keeping the full-length Opus file."
         }
     }
 
     Write-Host ""
-    Write-Host "Done."
+    Write-Host "$(Get-TableFlipText) Done."
     Write-Host "Files are in: $OutDir"
     if ($SongCount -gt 0) {
         Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
     } else {
-        Write-Host "This video did not create separate songs, so the full audio file was kept."
+        Write-Mascot "(._.)" "This video did not create separate songs, so the full audio file was kept."
     }
     Write-Host ""
     } catch {
         Write-Host ""
-        Write-Host "Something went wrong while processing that link."
+        Write-Mascot "(x_x)" "Something went wrong while processing that link."
         Write-Host $_.Exception.Message
         Write-Host ""
         Write-Host "Paste another link to try again, or press Enter with no link to close."

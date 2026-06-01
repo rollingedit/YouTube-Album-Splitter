@@ -44,6 +44,7 @@ After a run finishes, songs are saved into a `YouTube Album Splitter Songs` fold
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
 - Prefers YouTube's best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers or description timestamps.
+- Shows live terminal progress while downloading, splitting, tagging, and converting.
 - Creates numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
@@ -64,6 +65,8 @@ The split behavior from the feature list follows a strict order:
 1. YouTube chapter markers from the video.
 2. Timestamp lines in the video description.
 3. Full audio fallback if no usable track times are found.
+
+Before downloading, the tool reads the video metadata and counts the usable tracks. It then downloads the full audio once and does the actual track splitting itself with FFmpeg. That keeps the split order the same while letting the progress display show real track counts during the split.
 
 Description timestamps can look like:
 
@@ -109,14 +112,14 @@ What each part does:
 
 - **BAT**: Windows double-click entrypoint. Starts everything without requiring the user to open a terminal.
 - **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
-- **yt-dlp**: Downloads the YouTube audio, reads YouTube chapter markers, reads video metadata, and splits the upload into separate song files.
-- **FFmpeg**: Media backend for audio extraction, chapter splitting, square cover cropping, and stream processing.
+- **yt-dlp**: Reads video metadata, downloads the selected YouTube audio, and embeds the initial thumbnail/metadata.
+- **FFmpeg**: Media backend for audio extraction, controlled track splitting, square cover cropping, and stream processing.
 - **Python**: Runs only after Python exists. It is used for final metadata cleanup.
 - **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
 - **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
 - **winget**: Windows package installer used to install missing helper tools automatically.
 
-yt-dlp handles the initial thumbnail, then the tool re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
+yt-dlp handles the initial thumbnail and full-audio download. The tool then splits known tracks with FFmpeg so the terminal can show real `current/total` progress. After that, it re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
 
 The same internal pieces handle the optional AAC path. If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg creates 192 kbps `.m4a` files and strips leftover chapter/data streams so each AAC file behaves like a normal single song. Mutagen then writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after their AAC replacements are created and tagged successfully.
 
