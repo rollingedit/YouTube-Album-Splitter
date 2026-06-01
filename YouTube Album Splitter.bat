@@ -40,19 +40,43 @@ function Ensure-Command {
     Write-Host "$Name installed."
 }
 
+function Remove-StaleAacWorkFiles {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $staleFiles = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\..*\.(tmp|backup)\.m4a$|^\..*\.cover\.tmp\.jpg$' }
+
+    foreach ($file in $staleFiles) {
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Convert-ExistingOpusToAac {
     param([Parameter(Mandatory = $true)][string]$Root)
+
+    Remove-StaleAacWorkFiles -Root $Root
 
     $opusFiles = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.opus" -File -ErrorAction SilentlyContinue
     if (-not $opusFiles) {
         Write-Host ""
         Write-Host "No Opus files found in: $Root"
+        Remove-StaleAacWorkFiles -Root $Root
         return
     }
 
     Write-Host ""
     Write-Host "Converting Opus files to AAC .m4a..."
     Write-Host "Folder: $Root"
+
+    $folderCount = ($opusFiles | ForEach-Object { $_.DirectoryName } | Sort-Object -Unique | Measure-Object).Count
+    Write-Host ""
+    Write-Host "Found $($opusFiles.Count) Opus file(s) in $folderCount album folder(s)."
+    Write-Host "This will convert them to AAC .m4a and remove each Opus original after successful conversion."
+    $confirmAac = Read-Host "Continue? Type yes to continue"
+    if ($confirmAac.Trim() -ine "yes") {
+        Write-Host "AAC conversion cancelled."
+        return
+    }
 
     Write-Host ""
     Write-Host "Preparing M4A tag fixer..."
@@ -75,14 +99,15 @@ from __future__ import annotations
 
 import re
 import sys
+import base64
 from pathlib import Path
 
+from mutagen.flac import Picture
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
 opus_path = Path(sys.argv[1])
 m4a_path = Path(sys.argv[2])
-cover_path = Path(sys.argv[3])
 
 NAME = b"\xa9nam".decode("latin-1")
 ARTIST = b"\xa9ART".decode("latin-1")
@@ -96,6 +121,19 @@ def first(tags, *names):
                 return str(value[0])
             return str(value)
     return ""
+
+def cover_from_opus(tags):
+    pictures = tags.get("metadata_block_picture")
+    if not pictures:
+        return None
+
+    try:
+        picture = Picture(base64.b64decode(pictures[0]))
+    except Exception:
+        return None
+
+    image_format = MP4Cover.FORMAT_PNG if picture.mime == "image/png" else MP4Cover.FORMAT_JPEG
+    return MP4Cover(picture.data, imageformat=image_format)
 
 source = OggOpus(opus_path)
 audio = MP4(m4a_path)
@@ -118,8 +156,10 @@ if album_artist:
     audio["aART"] = [album_artist]
 if track_match:
     audio["trkn"] = [(int(track_match.group(0)), 0)]
-if cover_path.is_file():
-    audio["covr"] = [MP4Cover(cover_path.read_bytes(), imageformat=MP4Cover.FORMAT_JPEG)]
+
+cover = cover_from_opus(source)
+if cover is not None:
+    audio["covr"] = [cover]
 
 audio.save()
 '@ | Set-Content -LiteralPath $M4aTagScript -Encoding UTF8
@@ -131,45 +171,33 @@ audio.save()
 
     foreach ($opus in $opusFiles) {
         $aacPath = [System.IO.Path]::ChangeExtension($opus.FullName, ".m4a")
-        $tempAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".tmp.m4a")
-        $tempCoverPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".cover.tmp.jpg")
+        $aacWorkId = [guid]::NewGuid().ToString("N")
+        $tempAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".$aacWorkId.tmp.m4a")
+        $backupAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".$aacWorkId.backup.m4a")
+        $hadExistingAac = $false
         if (Test-Path -LiteralPath $aacPath) {
             Write-Host "Replacing existing AAC: $([System.IO.Path]::GetFileName($aacPath))"
-            Remove-Item -LiteralPath $aacPath -Force
+            Move-Item -LiteralPath $aacPath -Destination $backupAacPath -Force
+            $hadExistingAac = $true
             $replaced++
-        }
-
-        if (Test-Path -LiteralPath $tempAacPath) {
-            Remove-Item -LiteralPath $tempAacPath -Force
-        }
-        if (Test-Path -LiteralPath $tempCoverPath) {
-            Remove-Item -LiteralPath $tempCoverPath -Force
         }
 
         Write-Host "Converting: $($opus.Name)"
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 256k $tempAacPath 2>&1
+            $ffmpegOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $tempAacPath 2>&1
             $ffmpegExitCode = $LASTEXITCODE
-            $coverOutput = & ffmpeg -hide_banner -y -i $opus.FullName -map "0:v:0" -frames:v 1 -vf "crop='min(iw,ih)':'min(iw,ih)'" -update 1 $tempCoverPath 2>&1
-            $coverExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
         $tempAacFile = Get-Item -LiteralPath $tempAacPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -eq 0 -and $tempAacFile -and $tempAacFile.Length -gt 0) {
-            $tempCoverFile = Get-Item -LiteralPath $tempCoverPath -ErrorAction SilentlyContinue
-
-            if ($coverExitCode -ne 0 -or -not $tempCoverFile -or $tempCoverFile.Length -le 0) {
-                Write-Host "Warning: could not extract album art for AAC from $($opus.Name). Keeping audio-only AAC."
-            }
-
             $previousErrorActionPreference = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                $tagOutput = & py -3 "$M4aTagScript" "$($opus.FullName)" "$tempAacPath" "$tempCoverPath" 2>&1
+                $tagOutput = & py -3 "$M4aTagScript" "$($opus.FullName)" "$tempAacPath" 2>&1
                 $tagExitCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $previousErrorActionPreference
@@ -180,8 +208,8 @@ audio.save()
                 if (Test-Path -LiteralPath $tempAacPath) {
                     Remove-Item -LiteralPath $tempAacPath -Force
                 }
-                if (Test-Path -LiteralPath $tempCoverPath) {
-                    Remove-Item -LiteralPath $tempCoverPath -Force
+                if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
+                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
                 Write-Host "Could not tag AAC file: $($opus.Name)"
                 Write-Host "Kept original Opus file."
@@ -189,13 +217,28 @@ audio.save()
                 continue
             }
 
-            Move-Item -LiteralPath $tempAacPath -Destination $aacPath -Force
-            if (Test-Path -LiteralPath $tempCoverPath) {
-                Remove-Item -LiteralPath $tempCoverPath -Force
+            try {
+                Move-Item -LiteralPath $tempAacPath -Destination $aacPath -Force
+                Remove-Item -LiteralPath $opus.FullName -Force
+                if (Test-Path -LiteralPath $backupAacPath) {
+                    Remove-Item -LiteralPath $backupAacPath -Force
+                }
+                $converted++
+                $deleted++
+            } catch {
+                $failed++
+                if (Test-Path -LiteralPath $tempAacPath) {
+                    Remove-Item -LiteralPath $tempAacPath -Force
+                }
+                if (Test-Path -LiteralPath $aacPath) {
+                    Remove-Item -LiteralPath $aacPath -Force
+                }
+                if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
+                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
+                }
+                Write-Host "Could not finalize AAC file: $($opus.Name)"
+                Write-Host "Kept original Opus file."
             }
-            Remove-Item -LiteralPath $opus.FullName -Force
-            $converted++
-            $deleted++
             continue
         }
 
@@ -203,8 +246,8 @@ audio.save()
         if (Test-Path -LiteralPath $tempAacPath) {
             Remove-Item -LiteralPath $tempAacPath -Force
         }
-        if (Test-Path -LiteralPath $tempCoverPath) {
-            Remove-Item -LiteralPath $tempCoverPath -Force
+        if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
+            Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
         }
         Write-Host "Could not convert: $($opus.Name)"
         Write-Host "Kept original Opus file."
@@ -214,6 +257,7 @@ audio.save()
     Write-Host ""
     Write-Host "AAC conversion finished. Converted: $converted. Replaced existing AAC: $replaced. Failed: $failed."
     Write-Host "Removed Opus originals after successful AAC conversion: $deleted."
+    Remove-StaleAacWorkFiles -Root $Root
 }
 
 function Invoke-YtDlpDownload {
@@ -243,7 +287,7 @@ function Invoke-YtDlpDownload {
     }
 
     $firstText = $firstOutput -join "`n"
-    if ($firstText -match 'is not a valid URL|Unsupported URL|no such option|Invalid URL') {
+    if ($firstText -match 'is not a valid URL|Unsupported URL|Invalid URL') {
         Write-Host ""
         Write-Host "That does not look like a valid YouTube video link."
         Write-Host "Copy the full link from YouTube and try again."
@@ -261,7 +305,11 @@ function Invoke-YtDlpDownload {
     }
 
     Write-Host ""
-    Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+    if ($firstText -match 'no such option') {
+        Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+    } else {
+        Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+    }
     winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
     winget upgrade --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
     winget upgrade --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
