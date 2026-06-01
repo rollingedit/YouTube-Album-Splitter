@@ -84,6 +84,8 @@ The tool checks for the helper programs it needs and installs missing ones autom
 - Deno, so yt-dlp can use its external JavaScript challenge-solving path when YouTube requires it.
 - Python, for final Opus metadata and album-art tagging.
 
+For Python, the tool first tries existing `py -3`, `python`, and `python3` commands and verifies they run Python 3. It installs Python only if none of those work.
+
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
 
 Exact package IDs, network destinations, file locations, and uninstall commands are listed in [Security, Privacy, and System Changes](#security-privacy-and-system-changes).
@@ -242,6 +244,17 @@ Use this only for content you own, created, or have permission to download and p
 
 Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is a normal Windows security limitation for small unsigned projects, not proof that something is wrong. If you trust the file, click **More info** then **Run anyway**.
 
+## Design Choices
+
+This project intentionally prioritizes a one-file, double-click Windows workflow over cross-platform command-line packaging.
+
+- **Windows only**: the goal is a familiar Windows download-and-run experience, not a tool that asks users to install a language runtime, configure a shell, or manage command-line flags.
+- **One BAT release**: helper code is embedded so normal users do not have to keep multiple files together.
+- **Explicit track times only**: the tool uses YouTube chapters first, then description timestamps. It does not guess tracks from silence by default because false splits are worse than keeping the full audio.
+- **Automatic helper setup**: first run may install required tools through `winget` and `pip` so users do not have to set them up manually.
+- **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
+- **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the best low-friction option is usually to try again later, try another network/browser session, or use a video that does not require verification.
+
 ## Security, Privacy, and System Changes
 
 This project is open source, and the release download is the same plain-text `.bat` script from this repo. The release exists to make downloading easier for beginners.
@@ -337,9 +350,18 @@ winget uninstall --id DenoLand.Deno
 
 Python packages:
 
+Use whichever Python command works on your system. For example:
+
 ```powershell
 python -m pip uninstall mutagen
 python -m pip uninstall yt-dlp curl-cffi
+```
+
+Or, if your system uses the Python launcher:
+
+```powershell
+py -3 -m pip uninstall mutagen
+py -3 -m pip uninstall yt-dlp curl-cffi
 ```
 
 ## License
