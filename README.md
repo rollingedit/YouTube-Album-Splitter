@@ -27,7 +27,7 @@ It is designed for album-style YouTube uploads that show chapter markers on the 
 3. Double-click it.
 4. Paste the YouTube video link when it asks.
 5. Press Enter.
-6. Paste another link to process another upload, or press Enter with no link to close.
+6. Paste another link to process another upload, type `aac` to convert existing Opus files to AAC `.m4a`, or press Enter with no link to close.
 
 Finished songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together.
 
@@ -36,6 +36,7 @@ Finished songs are saved into a `YouTube Album Splitter Songs` folder next to th
 - One-file Windows tool. No separate installer or setup script.
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
+- Lets you type `aac` to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
 - Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
 - Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
 - Treats each pasted link as one selected video, even if the URL includes a playlist.
@@ -92,6 +93,8 @@ What each part does:
 - **winget**: Windows package installer used to install missing helper tools automatically.
 
 yt-dlp handles the initial thumbnail, then the tool re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
+
+If you type `aac` at the prompt, FFmpeg converts existing `.opus` files in the output folder into `.m4a` AAC files. It strips leftover chapter/data streams during conversion so each AAC file behaves like a normal single song, then writes M4A-native tags and square album art. The original Opus files are removed only after the matching AAC file is created successfully.
 
 So the internal design is modular, but the released user experience stays simple:
 
@@ -175,6 +178,8 @@ If the title cannot be parsed, the tool still downloads and tags the songs, but 
 If the folder name already exists, the tool adds a date/time suffix so a second run does not overwrite the first one.
 
 Album art is forced to a square thumbnail. If the original thumbnail is already square, the crop does not change it. If it is wide or tall, the tool crops the center so the final cover art is 1:1.
+
+If you use the optional AAC conversion, the tool creates `.m4a` files next to the `.opus` files, replaces any matching `.m4a` from an earlier run, removes each Opus file after its AAC version is created successfully, and leaves the Opus file alone if conversion fails.
 
 ## Why It Uses Opus
 
