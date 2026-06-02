@@ -348,16 +348,42 @@ function Invoke-WithMascotStatus {
 function Add-SessionPathDir {
     param([Parameter(Mandatory = $true)][string]$Dir)
 
-    if ([string]::IsNullOrWhiteSpace($Dir)) {
+    $normalizedDir = Normalize-PathDir $Dir
+    if ([string]::IsNullOrWhiteSpace($normalizedDir)) {
         return
     }
     if (-not $script:ExtraPathDirs) {
         $script:ExtraPathDirs = New-Object System.Collections.Generic.List[string]
     }
-    if (-not $script:ExtraPathDirs.Contains($Dir)) {
-        [void]$script:ExtraPathDirs.Add($Dir)
+    if (-not ($script:ExtraPathDirs | Where-Object { (Normalize-PathDir $_) -ieq $normalizedDir })) {
+        [void]$script:ExtraPathDirs.Add($normalizedDir)
     }
     Refresh-Path
+}
+
+function Normalize-PathDir {
+    param([string]$Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir)) {
+        return ""
+    }
+
+    $trimmed = $Dir.Trim().Trim('"').Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return ""
+    }
+
+    try {
+        $full = [System.IO.Path]::GetFullPath($trimmed)
+    } catch {
+        $full = $trimmed
+    }
+
+    $root = [System.IO.Path]::GetPathRoot($full)
+    while ($full.Length -gt $root.Length -and ($full.EndsWith("\") -or $full.EndsWith("/"))) {
+        $full = $full.Substring(0, $full.Length - 1)
+    }
+    return $full
 }
 
 function Refresh-Path {
@@ -381,9 +407,12 @@ function Refresh-Path {
         [void]$extraDirs.Add($dir)
     }
 
+    $existingPathDirs = @($env:Path -split ';' | ForEach-Object { Normalize-PathDir $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     foreach ($dir in $extraDirs) {
-        if ((Test-Path -LiteralPath $dir) -and (($env:Path -split ';') -notcontains $dir)) {
-            $env:Path = "$env:Path;$dir"
+        $normalizedDir = Normalize-PathDir $dir
+        if ((-not [string]::IsNullOrWhiteSpace($normalizedDir)) -and (Test-Path -LiteralPath $normalizedDir) -and -not ($existingPathDirs | Where-Object { $_ -ieq $normalizedDir })) {
+            $env:Path = "$env:Path;$normalizedDir"
+            $existingPathDirs += $normalizedDir
         }
     }
 }
@@ -1826,8 +1855,24 @@ function Get-SafeName {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     $safe = $Name -replace '[<>:"/\\|?*]', ''
+    $safe = $safe -replace '[\x00-\x1F]', ''
     $safe = $safe -replace '\s+', ' '
     $safe = $safe.Trim().TrimEnd('.')
+    if ([string]::IsNullOrWhiteSpace($safe)) {
+        return "Unknown Album"
+    }
+    $nameParts = $safe -split '\.', 2
+    $baseName = $nameParts[0]
+    if ($baseName -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+        if ($nameParts.Count -gt 1) {
+            $safe = "$baseName Album.$($nameParts[1])"
+        } else {
+            $safe = "$baseName Album"
+        }
+    }
+    if ($safe.Length -gt 180) {
+        $safe = $safe.Substring(0, 180).Trim().TrimEnd('.')
+    }
     if ([string]::IsNullOrWhiteSpace($safe)) {
         return "Unknown Album"
     }
@@ -1876,6 +1921,277 @@ function Get-AlbumInfoFromTitle {
     }
 }
 
+function Show-AlbumCelebration {
+    # Album-milestone celebration animation (the 10-album run, or the bigger,
+    # crazier 100-album run). Self-contained: every helper, glyph, and color is
+    # nested/local, so nothing runs at load time and no global names are added.
+    #
+    # Window-resize protection matches the main mascot status line: each frame is
+    # gated by Test-Resize-Stable (a short cooldown that skips drawing while the
+    # width is mid-change) and Draw-Frame blanks the whole row with real spaces
+    # before redrawing, so resizing the window during the animation never leaves
+    # stale glyphs on the right side. The whole thing is wrapped so an animation
+    # error can never interrupt the download loop.
+    param([Parameter(Mandatory = $true)][int]$AlbumCount)
+
+    try {
+        $esc0 = [char]27
+        $script:yellow  = if ($script:AnsiEnabled) { "$esc0[93m" } else { "" }
+        $script:green   = if ($script:AnsiEnabled) { "$esc0[92m" } else { "" }
+        $script:magenta = if ($script:AnsiEnabled) { "$esc0[95m" } else { "" }
+        $script:cyan    = if ($script:AnsiEnabled) { "$esc0[96m" } else { "" }
+        $script:red     = if ($script:AnsiEnabled) { "$esc0[91m" } else { "" }
+        $script:white   = if ($script:AnsiEnabled) { "$esc0[97m" } else { "" }
+        $script:blue    = if ($script:AnsiEnabled) { "$esc0[94m" } else { "" }
+        $script:reset   = if ($script:AnsiEnabled) { "$esc0[0m" } else { "" }
+        $script:lastVis = 0
+        $script:lastWidth = 0
+        $script:lastResizeAt = Get-Date
+        $script:resizeCooldownMs = 100
+        $script:wasResizing = $false
+
+        # Build a string from unicode codepoints so this source stays pure ASCII.
+        function U { param([int[]]$cp) return (-join ($cp | ForEach-Object { [char]$_ })) }
+
+        # Visible column count: strip ANSI color codes, then count chars.
+        function VisibleLen { param([string]$s) return ($s -replace ([regex]::Escape([string][char]27) + '\[[0-9;]*m'), '').Length }
+
+        # Clip a (possibly colored) line to Max visible columns without cutting an escape sequence.
+        function Clip-Line {
+            param([string]$Text, [int]$Max)
+            $esc = [char]27
+            $sb = New-Object System.Text.StringBuilder
+            $vis = 0; $i = 0; $hadColor = $false
+            while ($i -lt $Text.Length) {
+                if ($Text[$i] -eq $esc) {
+                    [void]$sb.Append($Text[$i]); $i++
+                    if ($i -lt $Text.Length -and $Text[$i] -eq [char]'[') {
+                        [void]$sb.Append($Text[$i]); $i++
+                        while ($i -lt $Text.Length -and $Text[$i] -ne [char]'m') { [void]$sb.Append($Text[$i]); $i++ }
+                        if ($i -lt $Text.Length) { [void]$sb.Append($Text[$i]); $i++ }
+                    }
+                    $hadColor = $true
+                } else {
+                    if ($vis -ge $Max) { break }
+                    [void]$sb.Append($Text[$i]); $vis++; $i++
+                }
+            }
+            if ($hadColor) { [void]$sb.Append("$esc[0m") }
+            return $sb.ToString()
+        }
+
+        function Test-Resize-Stable {
+            $w = try { [Console]::WindowWidth } catch { 80 }
+            if ($script:lastWidth -ne 0 -and $w -ne $script:lastWidth) {
+                $script:lastResizeAt = Get-Date
+                $script:lastWidth = $w
+                $script:wasResizing = $true
+                return $false
+            }
+            $script:lastWidth = $w
+            return (((Get-Date) - $script:lastResizeAt).TotalMilliseconds -ge $script:resizeCooldownMs)
+        }
+
+        # Draw one frame. Blank the whole row with real spaces first, then draw the
+        # line. A full-row space wipe is immune to the combining marks that count as
+        # columns in a string but render zero-width, which count-based clearing trips on.
+        function Draw-Frame {
+            param([string]$Text)
+            $w = try { [Console]::WindowWidth } catch { 80 }
+            if (-not (Test-Resize-Stable)) { return }
+            $script:wasResizing = $false
+            $maxW = [Math]::Max(10, $w - 1)
+            $line = Clip-Line -Text $Text -Max $maxW
+            Write-Host -NoNewline ("`r" + (' ' * $maxW) + "`r" + $line)
+            $script:lastVis = VisibleLen $line
+        }
+
+        function Play-Cycle {
+            param($Frames)
+            foreach ($fr in $Frames) {
+                Draw-Frame -Text $fr.T
+                Start-Sleep -Milliseconds $fr.D
+            }
+        }
+        function End-Section { Write-Host ""; $script:lastVis = 0 }
+
+        # ---- glyphs (rebuilt from codepoints so the source is ASCII-safe) ----
+        $block = [string][char]0x2580
+        $lenny = U 0x035C,0x035E,0x0296
+        $f0    = "(o_o)"
+        $f1    = "(O_O)"
+        $fb    = "(" + $block + "_" + $block + ")"
+        $fl    = "( " + $block + " " + $lenny + $block + ")"
+        $gunL  = U 0x033F,0x0027,0x033F,0x0027,0x005C,0x0335,0x0347,0x033F,0x033F,0x005C,0x0437
+        $gunR  = U 0x03B5,0x002F,0x0335,0x0347,0x033F,0x033F,0x002F,0x2019,0x033F,0x2019,0x033F
+        $wPre  = U 0x033F,0x033F,0x0020,0x033F,0x033F,0x0020,0x033F,0x033F,0x0020
+        $wSuf  = U 0x0020,0x033F,0x0020,0x033F,0x033F,0x0020,0x033F,0x033F,0x0020,0x033F,0x033F
+        $cg    = $gunL + "= " + $fl + " =" + $gunR
+        $wg    = $wPre + $cg + $wSuf
+        $eps   = [string][char]0x03B5
+        $ze    = [string][char]0x0437
+
+        # sparkle / confetti glyphs
+        $s4b   = [string][char]0x2726
+        $s4w   = [string][char]0x2727
+        $star  = [string][char]0x2605
+        $starO = [string][char]0x2729
+        $sop   = [string][char]0x22C6
+        $jp1   = [string][char]0xFF61
+        $jp2   = [string][char]0xFF65
+        $jp3   = [string][char]0xFF9F
+        $deg   = [string][char]0x00B0
+        $rng   = [string][char]0x02DA
+
+        # Decoration pairs (.L = left, .R = right) cycled by the confetti generator.
+        $script:confDecos = @(
+            [pscustomobject]@{ L = $s4b;                                                R = $s4b }
+            [pscustomobject]@{ L = $s4w + $jp2 + $jp3;                                  R = $jp3 + $jp2 + $s4w }
+            [pscustomobject]@{ L = $jp1 + $jp2 + ":*:" + $jp2 + $jp3 + $star;           R = $star + $jp3 + $jp2 + ":*:" + $jp2 + $jp1 }
+            [pscustomobject]@{ L = $sop + $jp1 + $deg + $starO;                         R = $starO + $deg + $jp1 + $sop }
+            [pscustomobject]@{ L = $rng + $s4b + $sop + $jp1;                           R = $jp1 + $sop + $s4b + $rng }
+            [pscustomobject]@{ L = $s4w + " " + $sop + " " + $s4b;                      R = $s4b + " " + $sop + " " + $s4w }
+            [pscustomobject]@{ L = $star + $sop + $s4b + $sop + $star;                  R = $star + $sop + $s4b + $sop + $star }
+            [pscustomobject]@{ L = $s4b + $s4w + $s4b + $s4w;                           R = $s4w + $s4b + $s4w + $s4b }
+            [pscustomobject]@{ L = $jp1 + $deg + $starO + $rng + $s4b + $sop;           R = $sop + $s4b + $rng + $starO + $deg + $jp1 }
+            [pscustomobject]@{ L = $sop + $star + $sop + $star + $sop;                  R = $sop + $star + $sop + $star + $sop }
+            [pscustomobject]@{ L = $s4b + " " + $s4w + " " + $star + " " + $sop;        R = $sop + " " + $star + " " + $s4w + " " + $s4b }
+            [pscustomobject]@{ L = $rng + $jp3 + $jp2 + $star + $jp2 + $jp3 + $rng;     R = $rng + $jp3 + $jp2 + $star + $jp2 + $jp3 + $rng }
+            [pscustomobject]@{ L = $s4b + $sop + $s4w + $sop + $s4b + $sop;             R = $sop + $s4b + $sop + $s4w + $sop + $s4b }
+            [pscustomobject]@{ L = $star + $s4b + $starO + $s4w + $star;                R = $star + $s4w + $starO + $s4b + $star }
+            [pscustomobject]@{ L = $jp1 + $jp2 + $sop + $deg + $starO + $rng + $s4b;    R = $s4b + $rng + $starO + $deg + $sop + $jp2 + $jp1 }
+            [pscustomobject]@{ L = $sop + $sop + $s4b + $s4w + $s4b + $sop + $sop;      R = $sop + $sop + $s4b + $s4w + $s4b + $sop + $sop }
+        )
+
+        # One confetti frame: colored decoration | gun | colored decoration.
+        function Confetti {
+            param([string]$L, [string]$Mid, [string]$R, [int]$D, [string]$Col = $script:yellow)
+            return @{ T = ($Col + $L + $script:reset + " " + $Mid + " " + $Col + $R + $script:reset); D = $D }
+        }
+
+        # Wake-up / gun-assembly / recoil run, scalable in speed (SpeedMul 0.5 = 2x faster).
+        function Build-Buildup {
+            param([double]$SpeedMul = 1.0)
+            function ms { param([int]$v) return [Math]::Max(35, [int][Math]::Round($v * $SpeedMul)) }
+            return @(
+                @{ T = "      " + $f0 + "  ..."; D = (ms 230) },
+                @{ T = "       " + $f0 + "  ..."; D = (ms 180) },
+                @{ T = "      " + $f1 + "  ..."; D = (ms 230) },
+                @{ T = "     " + $f1 + "  ...!"; D = (ms 160) },
+                @{ T = "      " + $fb + "  ..."; D = (ms 220) },
+                @{ T = "       " + $fb + "  ..."; D = (ms 160) },
+                @{ T = "      " + $fl + "  ..."; D = (ms 150) },
+                @{ T = "     = " + $fl + " ="; D = (ms 150) },
+                @{ T = "    " + $eps + "= " + $fl + " =" + $ze; D = (ms 170) },
+                @{ T = "   " + $cg; D = (ms 210) },
+                @{ T = "  " + $gunL + "== " + $fl + " ==" + $gunR; D = (ms 190) },
+                @{ T = " " + $wg; D = (ms 190) },
+                @{ T = "  " + $wg; D = (ms 140) },
+                @{ T = " " + $wg; D = (ms 140) },
+                @{ T = $wg; D = (ms 140) },
+                @{ T = " " + $wg; D = (ms 130) },
+                @{ T = $wPre + $gunL + "== " + $fl + " ==" + $gunR + $wSuf; D = (ms 130) },
+                @{ T = $wPre + $gunL + "=  " + $fl + "  =" + $gunR + $wSuf; D = (ms 130) },
+                @{ T = $wPre + $gunL + "== " + $fl + " ==" + $gunR + $wSuf; D = (ms 130) },
+                @{ T = $wPre + $gunL + "= /" + $fl + "\ =" + $gunR + $wSuf; D = (ms 150) },
+                @{ T = $wPre + $gunL + "= \" + $fl + "/ =" + $gunR + $wSuf; D = (ms 150) },
+                @{ T = $wPre + $gunL + "= /" + $fl + "\ =" + $gunR + $wSuf; D = (ms 150) },
+                @{ T = $wPre + $gunL + "= \" + $fl + "/ =" + $gunR + $wSuf; D = (ms 150) }
+            )
+        }
+
+        # Procedural confetti: cycles decoration patterns and rotating colors around the compact gun.
+        function Build-Confetti {
+            param([int]$Count, [int]$BaseMs)
+            $palette = @($script:yellow, $script:magenta, $script:cyan, $script:green, $script:white)
+            $frames = @()
+            for ($i = 0; $i -lt $Count; $i++) {
+                $d = $script:confDecos[$i % $script:confDecos.Count]
+                $col = $palette[$i % $palette.Count]
+                $jitter = ((($i % 3) - 1) * 12)
+                $frames += (Confetti $d.L $cg $d.R ([Math]::Max(40, $BaseMs + $jitter)) $col)
+            }
+            return $frames
+        }
+
+        # Color-flash the same text through a palette.
+        function Build-ColorFlash {
+            param([string]$Text, [int]$Times, [int]$Ms)
+            $palette = @($script:cyan, $script:yellow, $script:green, $script:magenta, $script:red, $script:white)
+            $frames = @()
+            for ($i = 0; $i -lt $Times; $i++) {
+                $col = $palette[$i % $palette.Count]
+                $frames += @{ T = ($col + $Text + $script:reset); D = $Ms }
+            }
+            return $frames
+        }
+
+        # 10-album run: he wakes up, draws the gun, then hand-tuned confetti frames.
+        function Build-Celebration {
+            param([int]$AlbumCount = 10)
+            $confetti = @(
+                (Confetti $s4b                                  $wg ($s4b)                                  190),
+                (Confetti ($s4w + $jp2 + $jp3)                  $wg ($jp3 + $jp2 + $s4w)                    190),
+                (Confetti ($jp1 + $jp2 + ":*:" + $jp2 + $jp3 + $star) $cg ($star + $jp3 + $jp2 + ":*:" + $jp2 + $jp1) 180),
+                (Confetti ($sop + $jp1 + $deg + $starO)         $cg ($starO + $deg + $jp1 + $sop)           180),
+                (Confetti ($rng + $s4b + $sop + $jp1)           $cg ($jp1 + $sop + $s4b + $rng)             175),
+                (Confetti ($s4w + " " + $sop + " " + $s4b)      $wg ($s4b + " " + $sop + " " + $s4w)        175),
+                (Confetti ($star + " " + $jp1 + $jp2 + ":*:" + $jp2 + $jp3) $cg ($jp3 + $jp2 + ":*:" + $jp2 + $jp1 + " " + $star) 165),
+                (Confetti ($starO + $deg + $jp1 + $sop)         $cg ($sop + $jp1 + $deg + $starO)           165),
+                (Confetti ($s4b + " " + $s4w + " " + $sop + " " + $star) $wg ($star + " " + $sop + " " + $s4w + " " + $s4b) 160),
+                (Confetti ($jp1 + $deg + $starO + $rng + $s4b)  $cg ($s4b + $rng + $starO + $deg + $jp1)    160),
+                (Confetti ($sop + $jp1 + $deg + $starO)         $cg ($starO + $deg + $jp1 + $sop)           155),
+                (Confetti ($s4b + $s4w + $sop + $star)          $cg ($star + $sop + $s4w + $s4b)            150)
+            )
+            return (Build-Buildup -SpeedMul 1.0) + $confetti
+        }
+
+        # 100-album run: 2x frame speed but ~4x crazier confetti, so it lasts ~2x as long.
+        function Build-CelebrationBig {
+            param([int]$AlbumCount = 100)
+            return (Build-Buildup -SpeedMul 0.5) + (Build-Confetti -Count 96 -BaseMs 72)
+        }
+
+        # Two-line finale: he poses on his own line (stays on screen), then the album
+        # banner drops to the next line. Separate lines mean neither gets clipped.
+        function Play-Finale {
+            param([int]$AlbumCount, [string]$Threat, [switch]$Flash)
+            $pose = $script:yellow + $s4b + " " + $s4w + $script:reset + "  " + $cg + "  " + $script:yellow + $s4w + " " + $s4b + $script:reset
+            Draw-Frame -Text $pose
+            Start-Sleep -Milliseconds 900
+            Write-Host ""
+            $script:lastVis = 0
+
+            $plain   = "$AlbumCount ALBUMS THIS SESSION   $Threat"
+            $ci = $Threat.IndexOf(":")
+            if ($ci -ge 0) {
+                $threatColored = $script:magenta + $Threat.Substring(0, $ci + 1) + $script:reset + $script:cyan + $Threat.Substring($ci + 1).ToUpper() + $script:reset
+            } else {
+                $threatColored = $script:magenta + $Threat + $script:reset
+            }
+            $colored = $script:green + "$AlbumCount ALBUMS THIS SESSION" + $script:reset + "   " + $threatColored
+            if ($Flash) { Play-Cycle (Build-ColorFlash -Text $plain -Times 22 -Ms 150) }
+            Draw-Frame -Text $colored
+            Start-Sleep -Milliseconds 2000
+        }
+
+        Write-Host ""
+        $script:lastVis = 0
+        if ($AlbumCount -ge 100) {
+            Play-Cycle (Build-CelebrationBig -AlbumCount $AlbumCount)
+            Play-Finale -AlbumCount $AlbumCount -Threat "archival threat level: certified unhinged." -Flash
+        } else {
+            Play-Cycle (Build-Celebration -AlbumCount $AlbumCount)
+            Play-Finale -AlbumCount $AlbumCount -Threat "archival threat level: unreasonable."
+        }
+        End-Section
+    } catch {
+        # An animation glitch must never interrupt the download loop.
+        try { Write-Host "" } catch {}
+    }
+}
+
+# YTAS_MAIN_APP_START
 $script:AnsiEnabled = Enable-AnsiOutput
 
 Write-Host ""
@@ -1905,7 +2221,19 @@ $ScriptDir = Split-Path -Parent $env:BAT_PATH
 $DownloadsRoot = Join-Path $ScriptDir "YouTube Album Splitter Songs"
 New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
 
+# Session album counter: counts albums successfully downloaded this run. When it
+# crosses a milestone (10, then 100) a celebration plays once, just before the
+# next paste-link prompt. $PendingCelebration carries the milestone from the spot
+# where the album finished to the top of the loop so it shows before the prompt.
+$script:AlbumsThisSession = 0
+$script:PendingCelebration = 0
+
 while ($true) {
+    if ($script:PendingCelebration -gt 0) {
+        Show-AlbumCelebration -AlbumCount $script:PendingCelebration
+        $script:PendingCelebration = 0
+    }
+
     Write-Host ""
     Write-Host "Paste a YouTube album link, then press Enter."
     Write-Host "Type $(Get-Cmd 'aac') to convert existing Opus files to AAC .m4a."
@@ -1984,6 +2312,12 @@ while ($true) {
         }
 
         Write-Step "Downloaded album audio."
+
+        # Count this album and arm a milestone celebration for the next prompt.
+        $script:AlbumsThisSession++
+        if ($script:AlbumsThisSession -eq 10 -or $script:AlbumsThisSession -eq 100) {
+            $script:PendingCelebration = $script:AlbumsThisSession
+        }
 
         $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
         Where-Object { $_.Name -notmatch '^\d+\. ' } |
