@@ -1,14 +1,16 @@
 ﻿# YouTube Album Splitter
 
-One file. Double-click. Paste a YouTube link. Get separate song files.
+Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link. Get separate song files.
 
 ![YouTube Album Splitter running in Windows Terminal](assets/screenshot.png)
 
-YouTube Album Splitter is a beginner-friendly, no manual setup Windows tool for turning a timestamped YouTube album upload you own or have permission to use into separate song files automatically.
+YouTube Album Splitter is a self-contained Windows app packaged as a single `.bat` file. It turns a timestamped YouTube album upload you own or have permission to use into separate song files automatically, with no manual setup.
 
 The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
 
-This tool does all of automatically. The automation behind it is custom-built, then packaged into one double-click `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
+This tool does all of that automatically. The automation behind it is custom-built, then deliberately packed into one double-click `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, no extracted app folder, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
+
+That single-file app design is the point. The release `.bat` checks dependencies, repairs missing tools when it can, runs the download and media pipeline, tags the finished songs, and keeps the user in one paste-link flow.
 
 It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts.
 
@@ -35,7 +37,8 @@ After a run finishes, songs are saved into a `YouTube Album Splitter Songs` fold
 
 ## Features
 
-- One-file Windows tool. No separate installer or setup script.
+- One-file Windows app. No separate installer, setup script, app folder, or helper-file bundle.
+- Self-contained first-run setup: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
 - Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
@@ -98,6 +101,21 @@ For Python, the tool tries existing `py -3`, `python`, and `python3` commands an
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
 
 The exact package IDs, network destinations, file locations, and uninstall commands are collected later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run is doing.
+
+## Why It Is One File
+
+The single-file release is the product.
+
+The released `.bat` carries the package manager logic, terminal UI, media pipeline, metadata pipeline, retry engine, and dependency resolver inside one inspectable file. That gives users an app-like experience while keeping the normal path as simple as:
+
+```text
+Download one BAT
+Double-click
+Paste one link
+Get split and tagged songs
+```
+
+The result is a release that is easy to share, easy to inspect, and hard to mis-install. Users can split one album upload without installing a Python project, keeping a folder of scripts together, or learning a command-line workflow. The complexity stays in the automation where it belongs; the downloaded artifact stays one file.
 
 ## How It Works
 
