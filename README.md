@@ -88,10 +88,12 @@ To make that one-file workflow work on a fresh Windows machine, the tool checks 
 
 - yt-dlp, for downloading from YouTube.
 - FFmpeg, for audio conversion, chapter splitting, and cover extraction.
-- Deno, so yt-dlp can use its external JavaScript challenge-solving path when YouTube requires it.
 - Python, for final Opus metadata and album-art tagging.
+- Deno, only when needed: yt-dlp uses it for YouTube's JavaScript challenge solver on some videos. It is no longer installed up front. If a download fails in a way that looks like it needs the solver, the tool sets Deno up and retries once.
 
-For Python, the tool first tries existing `py -3`, `python`, and `python3` commands and verifies they run Python 3. It installs Python only if none of those work.
+On a normal machine it installs these with `winget`. If `winget` is unavailable (for example, the Microsoft Store is turned off by Group Policy), it falls back to setting tools up another way: yt-dlp, FFmpeg, and `mutagen` through Python's `pip` (and Deno, only if a later download needs it, through its official installer). The one tool that cannot install itself this way is Python, so if `winget` is unavailable and Python is missing, the tool prints a short guide to install Python by hand, then sets up everything else automatically the next time you run it.
+
+For Python, the tool tries existing `py -3`, `python`, and `python3` commands and uses one only if it is Python 3.10 or newer (the minimum for current yt-dlp and `ffmpeg-downloader`). If no Python is found, or the only one present is older than 3.10, it sets up a current Python: with `winget` it installs/updates to Python 3.12 automatically (alongside any older copy, which it leaves untouched); without `winget` it shows a short guide to install Python 3.10 or newer by hand, then continues on the next run.
 
 It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
 
@@ -241,7 +243,7 @@ If conversion fails for a file, the original `.opus` file is kept.
 
 Windows is required.
 
-Most Windows 10 and Windows 11 computers already include `winget`. If yours does not, the tool automatically opens the **App Installer** page (in the Microsoft Store, or your browser if the Store is unavailable); install or update App Installer there, then run the file again.
+Most Windows 10 and Windows 11 computers already include `winget`. If yours does not, the tool does not need it: it sets up yt-dlp, FFmpeg, and Deno another way (Python's `pip`, and Deno's official installer when a download needs it). On an ordinary PC the setup guide also points you to update **App Installer** in the Microsoft Store (it prints the link rather than opening it), since that restores `winget` and the normal automatic path; on a PC where the Store is turned off (for example, by Group Policy) it acknowledges that and does not suggest using the Store. The one tool it cannot install without `winget` is Python itself, so if `winget` is unavailable and Python is missing, it prints a short guide with a link to install Python, then continues automatically the next time you run the file.
 
 ## Important
 
@@ -270,7 +272,7 @@ Because the script can install helper tools automatically, here is exactly what 
 
 ### Packages It May Install
 
-Installed through `winget` if missing:
+Installed through `winget` when it is available and a tool is missing:
 
 ```text
 yt-dlp.yt-dlp
@@ -279,18 +281,16 @@ Python.Python.3.12
 DenoLand.Deno
 ```
 
-Installed through `pip` if missing:
+Installed through `pip` (always for `mutagen`, and as the `winget`-free fallback for yt-dlp and FFmpeg):
 
 ```text
 mutagen
-```
-
-Only during the retry/repair path, if the active `yt-dlp` appears to be a Python-installed version:
-
-```text
 yt-dlp[default]
 curl-cffi
+ffmpeg-downloader
 ```
+
+`ffmpeg-downloader` fetches a static FFmpeg/ffprobe build and is only used when `winget` is unavailable. `yt-dlp[default]` and `curl-cffi` are also used on the retry/repair path when the active `yt-dlp` appears to be a Python-installed version. Deno is installed only on demand (via `winget`, or its official installer when `winget` is unavailable) the first time a download needs YouTube's JavaScript challenge solver.
 
 ### Network Access
 
@@ -299,7 +299,8 @@ The script may contact:
 - YouTube / YouTube Music, through `yt-dlp`, to read video data and download audio.
 - GitHub, when `yt-dlp` downloads its external JavaScript challenge-solving component.
 - Microsoft `winget` package sources, when installing or upgrading dependencies.
-- Python package indexes, when installing `mutagen` or repairing a Python-installed `yt-dlp`.
+- Python package indexes, when installing `mutagen`, repairing a Python-installed `yt-dlp`, or (without `winget`) setting up yt-dlp and FFmpeg.
+- `deno.land`, only when Deno is set up on demand without `winget`.
 
 The script does not upload your files anywhere. It downloads audio from the link you provide and writes the finished files locally.
 
@@ -362,6 +363,7 @@ Use whichever Python command works on your system. For example:
 ```powershell
 python -m pip uninstall mutagen
 python -m pip uninstall yt-dlp curl-cffi
+python -m pip uninstall ffmpeg-downloader
 ```
 
 Or, if your system uses the Python launcher:
@@ -369,7 +371,10 @@ Or, if your system uses the Python launcher:
 ```powershell
 py -3 -m pip uninstall mutagen
 py -3 -m pip uninstall yt-dlp curl-cffi
+py -3 -m pip uninstall ffmpeg-downloader
 ```
+
+If Deno was set up without `winget`, it lives in `%USERPROFILE%\.deno`; remove that folder to uninstall it. If FFmpeg was set up with `ffmpeg-downloader`, run `ffdl remove --all` before uninstalling the package to delete its downloaded binaries.
 
 ## License
 

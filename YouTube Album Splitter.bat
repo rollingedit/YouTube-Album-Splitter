@@ -57,6 +57,41 @@ function Get-Cmd {
     return "$esc[96m$Text$esc[0m"
 }
 
+function Get-Hyperlink {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string]$Text = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        $Text = $Url
+    }
+    if (-not $script:AnsiEnabled) {
+        return $Text
+    }
+    # OSC 8 hyperlink: ESC ]8;; <url> ESC \ <text> ESC ]8;; ESC \
+    # Terminals that support it (e.g. Windows Terminal) make <text> clickable;
+    # others just show <text>, which here is the URL/path itself, so it stays
+    # readable and copyable.
+    $esc = [char]27
+    return ("{0}]8;;{1}{0}\{2}{0}]8;;{0}\" -f $esc, $Url, $Text)
+}
+
+function Get-PathHyperlink {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $uri = $null
+    try {
+        $uri = ([uri]$Path).AbsoluteUri
+    } catch {
+        $uri = ""
+    }
+    if ([string]::IsNullOrWhiteSpace($uri)) {
+        return $Path
+    }
+    return Get-Hyperlink -Url $uri -Text $Path
+}
+
 function Show-TableFlip {
     $deg  = [char]0x00B0
     $box  = [char]0x25A1
@@ -310,16 +345,46 @@ function Invoke-WithMascotStatus {
     }
 }
 
+function Add-SessionPathDir {
+    param([Parameter(Mandatory = $true)][string]$Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir)) {
+        return
+    }
+    if (-not $script:ExtraPathDirs) {
+        $script:ExtraPathDirs = New-Object System.Collections.Generic.List[string]
+    }
+    if (-not $script:ExtraPathDirs.Contains($Dir)) {
+        [void]$script:ExtraPathDirs.Add($Dir)
+    }
+    Refresh-Path
+}
+
 function Refresh-Path {
+    if (-not $script:ExtraPathDirs) {
+        $script:ExtraPathDirs = New-Object System.Collections.Generic.List[string]
+    }
+
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
 
-    # Make sure the App Execution Alias folder (where the winget alias lives) is
-    # reachable, even if it was missing from the saved PATH.
-    $windowsApps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
-    if ((Test-Path -LiteralPath $windowsApps) -and (($env:Path -split ';') -notcontains $windowsApps)) {
-        $env:Path = "$env:Path;$windowsApps"
+    # Make sure tool folders that may be missing from the saved PATH are still
+    # reachable in this window: the App Execution Alias folder (winget alias),
+    # the default Deno install folder, and any folder a setup step added (for
+    # example a pip-installed FFmpeg). Re-applied on every refresh so a later
+    # refresh does not wipe them out.
+    $extraDirs = New-Object System.Collections.Generic.List[string]
+    [void]$extraDirs.Add((Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"))
+    [void]$extraDirs.Add((Join-Path $env:USERPROFILE ".deno\bin"))
+    foreach ($dir in $script:ExtraPathDirs) {
+        [void]$extraDirs.Add($dir)
+    }
+
+    foreach ($dir in $extraDirs) {
+        if ((Test-Path -LiteralPath $dir) -and (($env:Path -split ';') -notcontains $dir)) {
+            $env:Path = "$env:Path;$dir"
+        }
     }
 }
 
@@ -369,37 +434,73 @@ function Invoke-Winget {
     & $winget @Arguments
 }
 
-function Show-WingetMissingHelp {
-    Write-Host ""
-    Write-Mascot "(o_o?)" "Windows could not find 'winget', the App Installer tool this needs." -Color "yellow"
-    Write-Host "This usually means Windows 'App Installer' is missing or out of date."
-    Write-Host ""
-    Write-Host "To fix it:"
-    Write-Host "  1. Open Microsoft Store (this file will try to open it for you)."
-    Write-Host "  2. Search for 'App Installer', then click Update, or Get if it is missing."
-    Write-Host "  3. Close this window and run this file again."
-    Write-Host ""
-    Write-Host "If the Store is blocked on this PC, winget can also be turned off under:"
-    Write-Host "  Settings > Apps > Advanced app settings > App execution aliases > App Installer (winget.exe)."
-    $storeOpened = $false
-    if (Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction SilentlyContinue) {
+function Test-StoreBlockedByPolicy {
+    # "Turn off the Store application" (Group Policy) writes RemoveWindowsStore=1.
+    # That is the deliberate-lockdown case where winget / App Installer cannot be
+    # restored automatically. Used only to word the manual guidance correctly;
+    # the manual path is offered whenever winget is unavailable for any reason.
+    foreach ($key in @(
+        "HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore",
+        "HKCU:\SOFTWARE\Policies\Microsoft\WindowsStore"
+    )) {
         try {
-            Start-Process "ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1" -ErrorAction Stop | Out-Null
-            $storeOpened = $true
-        } catch {
-            $storeOpened = $false
-        }
+            if (Test-Path $key) {
+                $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+                if ($props -and $props.RemoveWindowsStore -eq 1) {
+                    return $true
+                }
+            }
+        } catch {}
     }
-    if (-not $storeOpened) {
-        try { Start-Process "https://apps.microsoft.com/detail/9NBLGGH4NNS1" -ErrorAction SilentlyContinue | Out-Null } catch {}
+    return $false
+}
+
+function Show-ManualSetupHelp {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Url,
+        [string]$ExtraTip = ""
+    )
+
+    Write-Host ""
+    Write-Mascot "(o_o?)" "$Name is not installed, and Windows 'winget' is not available here to set it up automatically." -Color "yellow"
+
+    if (Test-StoreBlockedByPolicy) {
+        # Store deliberately turned off by Group Policy: opening it would be
+        # useless and presumptuous. Go straight to a by-hand install.
+        Write-Host "The Microsoft Store looks turned off by Group Policy on this PC, so winget cannot be used."
+        Write-Host "That is fine for a locked-down setup. Install this by hand instead:"
+    } else {
+        # Store is not policy-blocked: mention that updating 'App Installer'
+        # restores winget and automatic setup, as an optional easier fix for an
+        # ordinary PC. Do NOT launch the Store. From here we cannot tell whether
+        # it would actually work - App Installer may be stale, source-disabled,
+        # or OS-gated on older Windows - and launching it can reproduce a dead-end
+        # Store or an "update your Windows" prompt. Leave that choice to the user.
+        Write-Host "If this is an ordinary PC, the easiest fix is to update 'App Installer' in the Microsoft Store, which restores automatic setup:"
+        Write-Host "  Open Microsoft Store, search 'App Installer', click Update (or Get), then run this file again."
+        Write-Host ("  " + (Get-Hyperlink -Url "https://apps.microsoft.com/detail/9NBLGGH4NNS1"))
+        Write-Host ""
+        Write-Host "Or, if you would rather not use the Store, install it by hand instead:"
     }
+
+    Write-Host ""
+    Write-Host "  $Name"
+    Write-Host ("    " + (Get-Hyperlink -Url $Url))
+    if (-not [string]::IsNullOrWhiteSpace($ExtraTip)) {
+        Write-Host "    $ExtraTip"
+    }
+    Write-Host ""
 }
 
 function Ensure-Command {
     param(
         [Parameter(Mandatory = $true)][string]$Command,
-        [Parameter(Mandatory = $true)][string]$WingetId,
-        [Parameter(Mandatory = $true)][string]$Name
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$WingetId = "",
+        [scriptblock]$PipInstall,
+        [string]$ManualUrl = "",
+        [string]$ManualTip = ""
     )
 
     Refresh-Path
@@ -408,23 +509,58 @@ function Ensure-Command {
         return
     }
 
-    if (-not (Resolve-WingetPath)) {
-        Show-WingetMissingHelp
-        throw "Windows App Installer / winget is missing or out of date. Follow the steps above, then run this file again."
+    # Normal Windows path: try winget first.
+    if ((Resolve-WingetPath) -and -not [string]::IsNullOrWhiteSpace($WingetId)) {
+        Write-Host "$Name not found. Installing it now..."
+        $wingetSucceeded = $true
+        try {
+            Invoke-Winget -Arguments @("install", "--id", $WingetId, "-e", "--accept-package-agreements", "--accept-source-agreements")
+            if ($LASTEXITCODE -ne 0) {
+                $wingetSucceeded = $false
+            }
+        } catch {
+            $wingetSucceeded = $false
+        }
+        Refresh-Path
+        if (Get-Command $Command -ErrorAction SilentlyContinue) {
+            Write-Step "$Name installed."
+            return
+        }
+        if ($wingetSucceeded) {
+            # winget reported success but Windows has not exposed the command yet.
+            throw "$Name was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+        }
+        # winget is present but could not install (App Installer broken or blocked,
+        # source disabled, or an OS-upgrade prompt). Fall through to the other
+        # setup paths instead of giving up here.
+        Write-Host "winget could not install $Name on this PC. Trying another way..."
     }
 
-    Write-Host "$Name not found. Installing it now..."
-    Invoke-Winget -Arguments @("install", "--id", $WingetId, "-e", "--accept-package-agreements", "--accept-source-agreements")
-    Refresh-Path
-
-    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
-        throw "$Name was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+    # winget is unavailable (missing, or Store disabled by policy). If this tool
+    # can be set up through Python/pip, do that instead of pushing the Store.
+    if ($PipInstall -and $script:PythonCommand) {
+        Write-Host "$Name not found and winget is unavailable. Setting it up with Python..."
+        try {
+            & $PipInstall
+        } catch {
+            Write-Host "Automatic setup of $Name did not finish: $($_.Exception.Message)"
+        }
+        Refresh-Path
+        if (Get-Command $Command -ErrorAction SilentlyContinue) {
+            Write-Step "$Name installed."
+            return
+        }
     }
 
-    Write-Step "$Name installed."
+    # Last resort: tell the user exactly what to install by hand, then stop.
+    Show-ManualSetupHelp -Name $Name -Url $ManualUrl -ExtraTip $ManualTip
+    Write-Host "After installing it, close this window and run this file again."
+    throw "$Name is required. Install it using the link above, then run this file again."
 }
 
 function Resolve-PythonCommand {
+    param([int]$MinimumMinor = 10)
+
     Refresh-Path
 
     $candidates = @(
@@ -441,7 +577,7 @@ function Resolve-PythonCommand {
 
         $allArgs = @()
         $allArgs += $candidate.Args
-        $allArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)")
+        $allArgs += @("-c", "import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, $MinimumMinor) else 1)")
 
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -466,25 +602,60 @@ function Resolve-PythonCommand {
 function Ensure-PythonCommand {
     $script:PythonCommand = Resolve-PythonCommand
     if ($script:PythonCommand) {
+        Register-PythonUserScripts
         Write-Step "Python found."
         return
     }
 
-    if (-not (Resolve-WingetPath)) {
-        Show-WingetMissingHelp
-        throw "Windows App Installer / winget is missing or out of date. Follow the steps above, then run this file again."
+    # Tell apart "no Python" from "Python present but older than 3.10" so the
+    # messaging is honest and an outdated Python gets updated, not just reported.
+    $outdatedPython = [bool](Resolve-PythonCommand -MinimumMinor 0)
+
+    if (Resolve-WingetPath) {
+        if ($outdatedPython) {
+            Write-Host "Python is installed but too old (3.10 or newer is needed). Updating it now..."
+        } else {
+            Write-Host "Python not found. Installing it now..."
+        }
+        $wingetSucceeded = $true
+        try {
+            Invoke-Winget -Arguments @("install", "--id", "Python.Python.3.12", "-e", "--accept-package-agreements", "--accept-source-agreements")
+            if ($LASTEXITCODE -ne 0) {
+                $wingetSucceeded = $false
+            }
+        } catch {
+            $wingetSucceeded = $false
+        }
+        Refresh-Path
+
+        $script:PythonCommand = Resolve-PythonCommand
+        if ($script:PythonCommand) {
+            Register-PythonUserScripts
+            Write-Step $(if ($outdatedPython) { "Python updated." } else { "Python installed." })
+            return
+        }
+        if ($wingetSucceeded) {
+            throw "Python was set up, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+        }
+        # winget is present but could not set up Python. Fall through to the
+        # manual guide instead of telling the user to just re-run.
+        Write-Host "winget could not set up Python on this PC. Falling back to manual setup..."
     }
 
-    Write-Host "Python not found. Installing it now..."
-    Invoke-Winget -Arguments @("install", "--id", "Python.Python.3.12", "-e", "--accept-package-agreements", "--accept-source-agreements")
-    Refresh-Path
-
-    $script:PythonCommand = Resolve-PythonCommand
-    if (-not $script:PythonCommand) {
-        throw "Python was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
+    # No winget (or it could not set up Python). Python is the one tool that
+    # cannot bootstrap itself, so on a locked-down PC this is the single thing
+    # the user installs by hand. Once a current Python exists, the rest (yt-dlp,
+    # FFmpeg, mutagen, Deno) is set up automatically.
+    if ($outdatedPython) {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "Your Python is older than 3.10, which the download tools need." -Color "yellow"
     }
-
-    Write-Step "Python installed."
+    Show-ManualSetupHelp -Name "Python 3.10 or newer" -Url "https://www.python.org/downloads/" -ExtraTip "During setup, tick 'Add python.exe to PATH'."
+    Write-Host "Python is the only thing you need to install by hand here."
+    Write-Host "Once it is installed, this tool sets up everything else by itself."
+    Write-Host ""
+    Write-Host "Close this window, run this file again, and it will continue automatically."
+    throw "Python 3.10 or newer is required. Install it using the link above, then run this file again."
 }
 
 function Invoke-Python {
@@ -502,6 +673,149 @@ function Invoke-Python {
     $allArgs += $script:PythonCommand.Args
     $allArgs += $Arguments
     & $script:PythonCommand.Command @allArgs
+}
+
+function Register-PythonUserScripts {
+    # pip --user installs console scripts (yt-dlp.exe, ffdl.exe, ...) into the
+    # per-user Scripts folder, which is not on PATH by default. Make this window
+    # see it so a pip-based setup is found immediately after installing.
+    if (-not $script:PythonCommand) {
+        return
+    }
+    try {
+        $dir = (Invoke-Python -Arguments @("-c", "import sysconfig; print(sysconfig.get_path('scripts','nt_user'))") 2>$null | Select-Object -First 1)
+        if (-not [string]::IsNullOrWhiteSpace($dir)) {
+            Add-SessionPathDir $dir.Trim()
+        }
+    } catch {}
+}
+
+function Test-DenoAvailable {
+    if ($script:DenoAvailable) {
+        return $true
+    }
+    Refresh-Path
+    if (Get-Command deno -ErrorAction SilentlyContinue) {
+        $script:DenoAvailable = $true
+        return $true
+    }
+    return $false
+}
+
+function Get-RemoteComponentArgs {
+    # yt-dlp's external JavaScript challenge solver (ejs) needs Deno. Only pass
+    # the flag when Deno is actually present; otherwise yt-dlp errors on the flag
+    # itself, even for videos that never needed the solver.
+    if (Test-DenoAvailable) {
+        return @("--remote-components", "ejs:github")
+    }
+    return @()
+}
+
+function Install-Deno {
+    if (Test-DenoAvailable) {
+        return $true
+    }
+
+    # Prefer winget on a normal machine (keeps the documented uninstall path).
+    if (Resolve-WingetPath) {
+        Write-Host "Setting up Deno..."
+        try {
+            Invoke-Winget -Arguments @("install", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        } catch {}
+        if (Test-DenoAvailable) {
+            return $true
+        }
+    }
+
+    # No winget (or it did not expose deno): use the official Deno installer,
+    # which drops deno into %USERPROFILE%\.deno and updates the user PATH.
+    Write-Host "Setting up Deno (a small runtime yt-dlp can use for some protected videos)..."
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $env:DENO_INSTALL = Join-Path $env:USERPROFILE ".deno"
+        $installer = Invoke-RestMethod -Uri "https://deno.land/install.ps1"
+        Invoke-Expression $installer
+    } catch {
+        Write-Host "Could not set up Deno automatically: $($_.Exception.Message)"
+        return $false
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    Add-SessionPathDir (Join-Path $env:USERPROFILE ".deno\bin")
+    return [bool](Test-DenoAvailable)
+}
+
+function Install-FfmpegViaPip {
+    # Fetch static FFmpeg + ffprobe through the ffmpeg-downloader package so no
+    # Microsoft Store / winget is needed. Best-effort: Ensure-Command verifies
+    # ffmpeg afterward and falls back to manual guidance if this did not work.
+    Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "ffmpeg-downloader")
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        Refresh-Path
+        $ffdl = Get-Command ffdl -ErrorAction SilentlyContinue
+        if ($ffdl) {
+            & $ffdl.Source "install" "--add-path" "-y" *> $null
+        } else {
+            Invoke-Python -Arguments @("-m", "ffmpeg_downloader", "install", "--add-path", "-y") *> $null
+        }
+
+        # Make sure this window can see the binaries even if --add-path only
+        # updated the persistent PATH for future sessions.
+        $ffmpegPath = $null
+        try {
+            $ffmpegPath = (Invoke-Python -Arguments @("-c", "import ffmpeg_downloader as m; print(m.ffmpeg_path)") 2>$null | Select-Object -First 1)
+        } catch {}
+        if ($ffmpegPath -and (Test-Path -LiteralPath $ffmpegPath)) {
+            Add-SessionPathDir (Split-Path -Parent $ffmpegPath)
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    Refresh-Path
+}
+
+function Update-DownloadTools {
+    param([string]$FailureText = "")
+
+    if (Resolve-WingetPath) {
+        if ($FailureText -match 'no such option') {
+            Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+        } else {
+            Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+        }
+    } else {
+        Write-Host "yt-dlp failed. Checking the download tools, then trying once more..."
+    }
+
+    # Deno is optional and installed on demand: if a download failed and Deno is
+    # missing, set it up so the retry can use yt-dlp's ejs challenge solver.
+    if (-not (Test-DenoAvailable)) {
+        Install-Deno | Out-Null
+    }
+
+    if (Resolve-WingetPath) {
+        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
+    }
+
+    # Self-update a Python-installed yt-dlp (the no-winget setup path uses this).
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
+        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
+        try {
+            Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
+        } catch {}
+    }
+
+    Refresh-Path
 }
 
 function Remove-StaleAacWorkFiles {
@@ -530,7 +844,7 @@ function Convert-ExistingOpusToAac {
 
     Write-Host ""
     Write-Host "Converting Opus files to AAC .m4a..."
-    Write-Host "Folder: $Root"
+    Write-Host ("Folder: " + (Get-PathHyperlink -Path $Root))
 
     $folderCount = ($opusFiles | ForEach-Object { $_.DirectoryName } | Sort-Object -Unique | Measure-Object).Count
     Write-Host ""
@@ -1122,6 +1436,10 @@ function Invoke-YtDlpWithRecovery {
         [string]$ProgressText = ""
     )
 
+    $firstArgs = @()
+    $firstArgs += Get-RemoteComponentArgs
+    $firstArgs += $YtDlpArgs
+
     $firstResult = Invoke-WithMascotStatus -Message $Message -ProgressText $ProgressText -ScriptBlock {
         param([object[]]$ArgsForYtDlp)
         $output = & yt-dlp @ArgsForYtDlp 2>&1
@@ -1129,7 +1447,7 @@ function Invoke-YtDlpWithRecovery {
             Output = @($output)
             ExitCode = $LASTEXITCODE
         }
-    } -ArgumentList (,$YtDlpArgs)
+    } -ArgumentList (,$firstArgs)
     $firstOutput = @($firstResult.Output)
     if ($EchoOutput) {
         $firstOutput | ForEach-Object { Write-Host $_ }
@@ -1150,26 +1468,11 @@ function Invoke-YtDlpWithRecovery {
     }
 
     Write-Host ""
-    if (Resolve-WingetPath) {
-        if ($firstText -match 'no such option') {
-            Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
-        } else {
-            Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
-        }
-        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
-    } else {
-        Write-Host "yt-dlp failed, and winget is unavailable, so tool updates were skipped. Trying once more..."
-    }
+    Update-DownloadTools -FailureText $firstText
 
-    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
-    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
-        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
-        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
-    }
-
-    Refresh-Path
+    $retryArgs = @()
+    $retryArgs += Get-RemoteComponentArgs
+    $retryArgs += $YtDlpArgs
 
     $retryResult = Invoke-WithMascotStatus -Message $RetryMessage -ProgressText $ProgressText -ScriptBlock {
         param([object[]]$ArgsForYtDlp)
@@ -1178,7 +1481,7 @@ function Invoke-YtDlpWithRecovery {
             Output = @($output)
             ExitCode = $LASTEXITCODE
         }
-    } -ArgumentList (,$YtDlpArgs)
+    } -ArgumentList (,$retryArgs)
     $retryOutput = @($retryResult.Output)
     if ($EchoOutput) {
         $retryOutput | ForEach-Object { Write-Host $_ }
@@ -1222,7 +1525,6 @@ function Get-YtDlpMetadata {
         "--dump-single-json",
         "--no-warnings",
         "--no-playlist",
-        "--remote-components", "ejs:github",
         $Url
     )
 
@@ -1246,11 +1548,10 @@ function Invoke-YtDlpDownloadFullAudio {
         [int]$TrackCount = 0
     )
 
-    $downloadArgs = @(
+    $baseArgs = @(
         "--force-overwrites",
         "--no-playlist",
         "--newline",
-        "--remote-components", "ejs:github",
         "-P", $OutDir,
         "-f", "ba[acodec^=opus]/ba",
         "-x",
@@ -1262,7 +1563,11 @@ function Invoke-YtDlpDownloadFullAudio {
         $Url
     )
 
-    $firstResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $downloadArgs -Message "Downloading album audio" -TrackCount $TrackCount
+    $firstArgs = @()
+    $firstArgs += Get-RemoteComponentArgs
+    $firstArgs += $baseArgs
+
+    $firstResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $firstArgs -Message "Downloading album audio" -TrackCount $TrackCount
     if ($firstResult.ExitCode -eq 0) {
         return $true
     }
@@ -1273,28 +1578,13 @@ function Invoke-YtDlpDownloadFullAudio {
     }
 
     Write-Host ""
-    if (Resolve-WingetPath) {
-        if ($firstText -match 'no such option') {
-            Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
-        } else {
-            Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
-        }
-        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
-    } else {
-        Write-Host "yt-dlp failed, and winget is unavailable, so tool updates were skipped. Trying once more..."
-    }
+    Update-DownloadTools -FailureText $firstText
 
-    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
-    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
-        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
-        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
-    }
+    $retryArgs = @()
+    $retryArgs += Get-RemoteComponentArgs
+    $retryArgs += $baseArgs
 
-    Refresh-Path
-
-    $retryResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $downloadArgs -Message "Trying the download again" -TrackCount $TrackCount
+    $retryResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $retryArgs -Message "Trying the download again" -TrackCount $TrackCount
     if ($retryResult.ExitCode -eq 0) {
         return $true
     }
@@ -1593,10 +1883,23 @@ Write-Host "YouTube Album Splitter"
 Write-Host ""
 
 Write-Host "Checking required tools..."
-Ensure-Command -Command "yt-dlp" -WingetId "yt-dlp.yt-dlp" -Name "yt-dlp"
-Ensure-Command -Command "ffmpeg" -WingetId "Gyan.FFmpeg" -Name "FFmpeg"
+# Python first: on a PC without winget it is the one tool that cannot install
+# itself, and it is what bootstraps the rest (yt-dlp, FFmpeg, mutagen) through pip.
 Ensure-PythonCommand
-Ensure-Command -Command "deno" -WingetId "DenoLand.Deno" -Name "Deno"
+Ensure-Command -Command "yt-dlp" -Name "yt-dlp" -WingetId "yt-dlp.yt-dlp" -ManualUrl "https://github.com/yt-dlp/yt-dlp/releases/latest" -PipInstall {
+    Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
+}
+Ensure-Command -Command "ffmpeg" -Name "FFmpeg" -WingetId "Gyan.FFmpeg" -ManualUrl "https://www.gyan.dev/ffmpeg/builds/" -ManualTip "Download a static build, extract it, and add its bin folder to PATH." -PipInstall {
+    Install-FfmpegViaPip
+}
+# Deno is optional: check it so its status shows during setup, but never block
+# on it. yt-dlp uses it only for some videos; the download step installs it on
+# demand, and a Deno-less run is the normal fallback.
+if (Test-DenoAvailable) {
+    Write-Step "Deno found."
+} else {
+    Write-Mascot "(._.)" "Deno is not set up yet. It is only needed for some videos and will be added automatically if a download needs it."
+}
 
 $ScriptDir = Split-Path -Parent $env:BAT_PATH
 $DownloadsRoot = Join-Path $ScriptDir "YouTube Album Splitter Songs"
@@ -1858,7 +2161,7 @@ for path in sorted(chapter_dir.glob("*.opus")):
 
     Write-Host ""
     Show-TableFlip
-    Write-Host "Files are in: $OutDir"
+    Write-Host ("Files are in: " + (Get-PathHyperlink -Path $OutDir))
     if ($SongCount -gt 0) {
         Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
     } else {
