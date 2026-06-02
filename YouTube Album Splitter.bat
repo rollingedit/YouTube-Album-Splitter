@@ -18,13 +18,140 @@ function Get-TableFlipText {
     return '(' + [char]0x256F + [char]0x00B0 + [char]0x25A1 + [char]0x00B0 + ')' + [char]0x256F + [char]0xFE35 + ' ' + [char]0x253B + [char]0x2501 + [char]0x253B
 }
 
+function Enable-AnsiOutput {
+    try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+    try {
+        if (-not ('VtConsole' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class VtConsole {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+    public static bool Enable() {
+        IntPtr handle = GetStdHandle(-11);
+        uint mode;
+        if (!GetConsoleMode(handle, out mode)) { return false; }
+        return SetConsoleMode(handle, mode | 0x0004);
+    }
+}
+'@
+        }
+        return [VtConsole]::Enable()
+    } catch {
+        return $false
+    }
+}
+
+function Get-Cmd {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    if (-not $script:AnsiEnabled) {
+        return $Text
+    }
+    $esc = [char]27
+    return "$esc[96m$Text$esc[0m"
+}
+
+function Show-TableFlip {
+    $deg  = [char]0x00B0
+    $box  = [char]0x25A1
+    $arm  = [char]0x256F
+    $wave = [char]0xFE35
+    $tableUp   = [string]([char]0x2533) + [char]0x2501 + [char]0x2533
+    $tableDown = [string]([char]0x253B) + [char]0x2501 + [char]0x253B
+
+    $frames = @(
+        "($deg$box$deg)    $tableUp",
+        "($arm$deg$box$deg)$arm    $tableUp",
+        "($arm$deg$box$deg)$arm $wave  $tableDown",
+        "($arm$deg$box$deg)$arm$wave $tableDown"
+    )
+
+    $lastLen = 0
+    foreach ($frame in $frames) {
+        $pad = if ($lastLen -gt $frame.Length) { ' ' * ($lastLen - $frame.Length) } else { '' }
+        Write-Host -NoNewline ("`r$frame$pad")
+        $lastLen = [Math]::Max($lastLen, $frame.Length)
+        Start-Sleep -Milliseconds 140
+    }
+
+    try { $width = [Console]::WindowWidth } catch { $width = 80 }
+    Write-Host -NoNewline ("`r{0}`r" -f (' ' * ([Math]::Min($width - 1, $lastLen + 8))))
+
+    $final = Get-TableFlipText
+    if ($script:AnsiEnabled) {
+        $esc = [char]27
+        Write-Host "$esc[92m$final$esc[0m Done."
+    } else {
+        Write-Host "$final Done."
+    }
+}
+
+function Get-Colored {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [string]$Color = ""
+    )
+
+    if (-not $script:AnsiEnabled -or [string]::IsNullOrEmpty($Color)) {
+        return $Text
+    }
+    $codes = @{ "red" = "91"; "yellow" = "93"; "green" = "92"; "cyan" = "96"; "gray" = "90" }
+    if (-not $codes.ContainsKey($Color)) {
+        return $Text
+    }
+    $esc = [char]27
+    return "$esc[$($codes[$Color])m$Text$esc[0m"
+}
+
+function Write-Step {
+    param([Parameter(Mandatory = $true)][string]$Message)
+
+    Write-Host ("{0} {1}" -f (Get-Colored -Text ([string][char]0x2713) -Color "green"), $Message)
+}
+
+function Get-PercentBar {
+    param(
+        [object]$Percent,
+        [int]$Width = 10
+    )
+
+    if ($null -eq $Percent) {
+        return ""
+    }
+    $value = [double]$Percent
+    if ($value -lt 0) { $value = 0 }
+    if ($value -gt 100) { $value = 100 }
+    $filled = [int][Math]::Round(($value / 100.0) * $Width)
+    if ($filled -gt $Width) { $filled = $Width }
+    if ($filled -lt 0) { $filled = 0 }
+    $bar = ([string][char]0x2588) * $filled + ([string][char]0x2591) * ($Width - $filled)
+    return "[$bar] {0}%" -f [int][Math]::Round($value)
+}
+
+function Get-CountText {
+    param(
+        [Parameter(Mandatory = $true)][int]$Current,
+        [Parameter(Mandatory = $true)][int]$Total
+    )
+
+    $digits = ([string]$Total).Length
+    return "({0}/{1})" -f $Current.ToString().PadLeft($digits), $Total
+}
+
 function Write-Mascot {
     param(
         [Parameter(Mandatory = $true)][string]$Face,
-        [Parameter(Mandatory = $true)][string]$Message
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$Color = ""
     )
 
-    Write-Host "$Face $Message"
+    Write-Host ("{0} {1}" -f (Get-Colored -Text $Face -Color $Color), $Message)
 }
 
 function Get-YouTubeVideoIdFromUrl {
@@ -92,15 +219,15 @@ function Invoke-WithMascotStatus {
             $face = $faces[$i % $faces.Count]
             $dots = "." * (($i % 4) + 1)
             $dotField = $dots.PadRight(4)
-            $progressSuffix = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "   $ProgressText" }
+            $progressField = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "$ProgressText " }
             $prefix = "{0} " -f $face
-            $reservedLength = $prefix.Length + $dotField.Length + $progressSuffix.Length
+            $reservedLength = $prefix.Length + $progressField.Length + $dotField.Length
             $messageLimit = [Math]::Max(8, $maxLineLength - $reservedLength)
             $displayMessage = $Message
             if ($displayMessage.Length -gt $messageLimit) {
                 $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 4)).TrimEnd() + "... "
             }
-            $line = "{0}{1}{2}{3}" -f $prefix, $displayMessage, $dotField, $progressSuffix
+            $line = "{0}{1}{2}{3}" -f $prefix, $progressField, $displayMessage, $dotField
             if ($line.Length -gt $maxLineLength) {
                 $line = $line.Substring(0, $maxLineLength)
             }
@@ -134,6 +261,85 @@ function Refresh-Path {
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $env:Path = "$machinePath;$userPath"
+
+    # Make sure the App Execution Alias folder (where the winget alias lives) is
+    # reachable, even if it was missing from the saved PATH.
+    $windowsApps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+    if ((Test-Path -LiteralPath $windowsApps) -and (($env:Path -split ';') -notcontains $windowsApps)) {
+        $env:Path = "$env:Path;$windowsApps"
+    }
+}
+
+function Resolve-WingetPath {
+    if ($script:WingetPath -and (Test-Path -LiteralPath $script:WingetPath)) {
+        return $script:WingetPath
+    }
+
+    $command = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) {
+        $command = Get-Command winget -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source)) {
+        $script:WingetPath = $command.Source
+        return $script:WingetPath
+    }
+
+    $aliasPath = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\winget.exe"
+    if (Test-Path -LiteralPath $aliasPath) {
+        $script:WingetPath = $aliasPath
+        return $script:WingetPath
+    }
+
+    try {
+        $package = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller" -ErrorAction SilentlyContinue |
+            Sort-Object -Property Version -Descending |
+            Select-Object -First 1
+        if ($package -and $package.InstallLocation) {
+            $packageWinget = Join-Path $package.InstallLocation "winget.exe"
+            if (Test-Path -LiteralPath $packageWinget) {
+                $script:WingetPath = $packageWinget
+                return $script:WingetPath
+            }
+        }
+    } catch {}
+
+    return $null
+}
+
+function Invoke-Winget {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $winget = Resolve-WingetPath
+    if (-not $winget) {
+        throw "winget is not available."
+    }
+    & $winget @Arguments
+}
+
+function Show-WingetMissingHelp {
+    Write-Host ""
+    Write-Mascot "(o_o?)" "Windows could not find 'winget', the App Installer tool this needs." -Color "yellow"
+    Write-Host "This usually means Windows 'App Installer' is missing or out of date."
+    Write-Host ""
+    Write-Host "To fix it:"
+    Write-Host "  1. Open Microsoft Store (this file will try to open it for you)."
+    Write-Host "  2. Search for 'App Installer', then click Update, or Get if it is missing."
+    Write-Host "  3. Close this window and run this file again."
+    Write-Host ""
+    Write-Host "If the Store is blocked on this PC, winget can also be turned off under:"
+    Write-Host "  Settings > Apps > Advanced app settings > App execution aliases > App Installer (winget.exe)."
+    $storeOpened = $false
+    if (Get-AppxPackage -Name "Microsoft.WindowsStore" -ErrorAction SilentlyContinue) {
+        try {
+            Start-Process "ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1" -ErrorAction Stop | Out-Null
+            $storeOpened = $true
+        } catch {
+            $storeOpened = $false
+        }
+    }
+    if (-not $storeOpened) {
+        try { Start-Process "https://apps.microsoft.com/detail/9NBLGGH4NNS1" -ErrorAction SilentlyContinue | Out-Null } catch {}
+    }
 }
 
 function Ensure-Command {
@@ -149,12 +355,13 @@ function Ensure-Command {
         return
     }
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "Windows App Installer / winget is missing. Install 'App Installer' from the Microsoft Store, then run this again."
+    if (-not (Resolve-WingetPath)) {
+        Show-WingetMissingHelp
+        throw "Windows App Installer / winget is missing or out of date. Follow the steps above, then run this file again."
     }
 
     Write-Host "$Name not found. Installing it now..."
-    winget install --id $WingetId -e --accept-package-agreements --accept-source-agreements
+    Invoke-Winget -Arguments @("install", "--id", $WingetId, "-e", "--accept-package-agreements", "--accept-source-agreements")
     Refresh-Path
 
     if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
@@ -210,12 +417,13 @@ function Ensure-PythonCommand {
         return
     }
 
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "Windows App Installer / winget is missing. Install 'App Installer' from the Microsoft Store, then run this again."
+    if (-not (Resolve-WingetPath)) {
+        Show-WingetMissingHelp
+        throw "Windows App Installer / winget is missing or out of date. Follow the steps above, then run this file again."
     }
 
     Write-Host "Python not found. Installing it now..."
-    winget install --id Python.Python.3.12 -e --accept-package-agreements --accept-source-agreements
+    Invoke-Winget -Arguments @("install", "--id", "Python.Python.3.12", "-e", "--accept-package-agreements", "--accept-source-agreements")
     Refresh-Path
 
     $script:PythonCommand = Resolve-PythonCommand
@@ -275,7 +483,7 @@ function Convert-ExistingOpusToAac {
     Write-Host ""
     Write-Host "Found $($opusFiles.Count) Opus file(s) in $folderCount album folder(s)."
     Write-Host "This will convert them to AAC .m4a and remove each Opus original after successful conversion."
-    $confirmAac = Read-Host "Continue? Type yes to continue"
+    $confirmAac = Read-Host "Continue? Type $(Get-Cmd 'yes') to continue"
     if ($confirmAac.Trim() -ine "yes") {
         Write-Mascot "(u_u)" "AAC conversion cancelled."
         return
@@ -390,7 +598,7 @@ audio.save()
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText "($aacIndex/$($opusFiles.Count))" -ScriptBlock {
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText (Get-CountText -Current $aacIndex -Total $opusFiles.Count) -ScriptBlock {
                 param([string]$InputPath, [string]$OutputPath)
                 $output = & ffmpeg -hide_banner -y -i $InputPath -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $OutputPath 2>&1
                 [pscustomobject]@{
@@ -423,7 +631,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)"
+                Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
                 $tagOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
                 continue
@@ -448,7 +656,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)"
+                Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
             }
             continue
@@ -461,7 +669,7 @@ audio.save()
         if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
             Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
         }
-        Write-Mascot "(>_<)" "Could not convert: $($opus.Name)"
+        Write-Mascot "(>_<)" "Could not convert: $($opus.Name)" -Color "red"
         Write-Host "Kept original Opus file."
         $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
     }
@@ -480,14 +688,14 @@ function Write-YtDlpFailureIfNonRetryable {
 
     if ($Text -match 'is not a valid URL|Unsupported URL|Invalid URL') {
         Write-Host ""
-        Write-Mascot "(o_o?)" "That does not look like a valid YouTube video link."
+        Write-Mascot "(o_o?)" "That does not look like a valid YouTube video link." -Color "yellow"
         Write-Host "Copy the full link from YouTube and try again."
         return $true
     }
 
     if ($Text -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies from browser') {
         Write-Host ""
-        Write-Mascot "(o_o?)" "YouTube is asking this machine to sign in or confirm it is not a bot."
+        Write-Mascot "(o_o?)" "YouTube is asking this machine to sign in or confirm it is not a bot." -Color "yellow"
         Write-Host "Updating the tools will not fix that."
         Write-Host "Try again later, or try from a different network/browser session."
         return $true
@@ -495,7 +703,7 @@ function Write-YtDlpFailureIfNonRetryable {
 
     if ($Text -match 'Incomplete YouTube ID|Video unavailable|This video is unavailable|This video isn.?t available|This video has been removed|Private video|Video not available|Video not found|HTTP Error 404|HTTP Error 410') {
         Write-Host ""
-        Write-Mascot "(o_o?)" "YouTube could not find or play that video."
+        Write-Mascot "(o_o?)" "YouTube could not find or play that video." -Color "yellow"
         Write-Host "Updating the tools will not fix a missing, private, deleted, or incomplete video link."
         Write-Host "Double-check the pasted link and try again."
         return $true
@@ -528,29 +736,6 @@ function Get-LastDownloadPercent {
     }
 
     return [double]$matches[$matches.Count - 1].Groups[1].Value
-}
-
-function Get-EstimatedTrackProgressText {
-    param(
-        [object]$Percent,
-        [int]$TrackCount
-    )
-
-    if ($TrackCount -lt 2 -or $null -eq $Percent) {
-        return ""
-    }
-
-    $percentValue = [double]$Percent
-
-    $estimate = [int][Math]::Floor(($percentValue / 100.0) * $TrackCount) + 1
-    if ($estimate -lt 1) {
-        $estimate = 1
-    }
-    if ($estimate -gt $TrackCount) {
-        $estimate = $TrackCount
-    }
-
-    return "~($estimate/$TrackCount)"
 }
 
 function Write-MascotStatusLine {
@@ -659,7 +844,7 @@ function Invoke-YtDlpDownloadProcess {
         while (-not $process.HasExited) {
             $text = ($captured.ToArray() -join "`n")
             $percent = Get-LastDownloadPercent -Text $text
-            $progressText = Get-EstimatedTrackProgressText -Percent $percent -TrackCount $TrackCount
+            $progressText = Get-PercentBar -Percent $percent
             $face = $faces[$i % $faces.Count]
             $dots = "." * (($i % 4) + 1)
             Write-MascotStatusLine -Face $face -Message $Message -DotField $dots.PadRight(4) -ProgressText $progressText -LastLineLength ([ref]$lastLineLength)
@@ -731,14 +916,18 @@ function Invoke-YtDlpWithRecovery {
     }
 
     Write-Host ""
-    if ($firstText -match 'no such option') {
-        Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+    if (Resolve-WingetPath) {
+        if ($firstText -match 'no such option') {
+            Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+        } else {
+            Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+        }
+        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
     } else {
-        Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+        Write-Host "yt-dlp failed, and winget is unavailable, so tool updates were skipped. Trying once more..."
     }
-    winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
-    winget upgrade --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
-    winget upgrade --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
 
     $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
     if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
@@ -770,7 +959,7 @@ function Invoke-YtDlpWithRecovery {
         }
 
         Write-Host ""
-        Write-Mascot "(x_x)" "Still couldn't download after updating the tools."
+        Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
         Write-Host "Common causes:"
         Write-Host "- The link is private, age-restricted, deleted, or region-locked."
         Write-Host "- The link is a playlist/channel instead of one video."
@@ -811,7 +1000,7 @@ function Get-YtDlpMetadata {
     try {
         return (($metadataResult.Output -join "`n") | ConvertFrom-Json)
     } catch {
-        Write-Mascot "(u_u)" "Could not parse video metadata."
+        Write-Mascot "(u_u)" "Could not parse video metadata." -Color "yellow"
         return $null
     }
 }
@@ -850,14 +1039,18 @@ function Invoke-YtDlpDownloadFullAudio {
     }
 
     Write-Host ""
-    if ($firstText -match 'no such option') {
-        Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+    if (Resolve-WingetPath) {
+        if ($firstText -match 'no such option') {
+            Write-Host "yt-dlp looks too old for one of the required options. Updating tools, then trying once more..."
+        } else {
+            Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+        }
+        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
     } else {
-        Write-Host "yt-dlp failed. Updating download tools, then trying once more..."
+        Write-Host "yt-dlp failed, and winget is unavailable, so tool updates were skipped. Trying once more..."
     }
-    winget upgrade --id yt-dlp.yt-dlp -e --accept-package-agreements --accept-source-agreements
-    winget upgrade --id DenoLand.Deno -e --accept-package-agreements --accept-source-agreements
-    winget upgrade --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
 
     $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
     if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
@@ -878,7 +1071,7 @@ function Invoke-YtDlpDownloadFullAudio {
     }
 
     Write-Host ""
-    Write-Mascot "(x_x)" "Still couldn't download after updating the tools."
+    Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
     Write-Host "Common causes:"
     Write-Host "- The link is private, age-restricted, deleted, or region-locked."
     Write-Host "- The link is a playlist/channel instead of one video."
@@ -1071,7 +1264,7 @@ function Invoke-KnownTrackSplit {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegResult = Invoke-WithMascotStatus -Message "Splitting track: $trackTitle" -ProgressText "($trackNumber/$($tracks.Count))" -ScriptBlock {
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Splitting track: $trackTitle" -ProgressText (Get-CountText -Current $trackNumber -Total $tracks.Count) -ScriptBlock {
                 param(
                     [double]$StartSeconds,
                     [string]$InputPath,
@@ -1092,7 +1285,7 @@ function Invoke-KnownTrackSplit {
 
         $createdFile = Get-Item -LiteralPath $outputPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -ne 0 -or -not $createdFile -or $createdFile.Length -le 0) {
-            Write-Mascot "(>_<)" "Could not split track: $trackTitle"
+            Write-Mascot "(>_<)" "Could not split track: $trackTitle" -Color "red"
             $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
             foreach ($file in $createdFiles) {
                 if (Test-Path -LiteralPath $file) {
@@ -1108,7 +1301,7 @@ function Invoke-KnownTrackSplit {
         $createdFiles += $outputPath
     }
 
-    Write-Host "Created $($createdFiles.Count) track file(s)."
+    Write-Step "Split $($createdFiles.Count) track(s)."
     return $true
 }
 
@@ -1166,6 +1359,8 @@ function Get-AlbumInfoFromTitle {
     }
 }
 
+$script:AnsiEnabled = Enable-AnsiOutput
+
 Write-Host ""
 Write-Host "YouTube Album Splitter"
 Write-Host ""
@@ -1183,7 +1378,7 @@ New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
 while ($true) {
     Write-Host ""
     Write-Host "Paste a YouTube album link, then press Enter."
-    Write-Host "Type aac to convert existing Opus files to AAC .m4a."
+    Write-Host "Type $(Get-Cmd 'aac') to convert existing Opus files to AAC .m4a."
     Write-Host "Press Enter with no link to close."
     Write-Host ""
 
@@ -1195,20 +1390,20 @@ while ($true) {
     if ($Url.Trim() -ieq "aac") {
         Convert-ExistingOpusToAac -Root $DownloadsRoot
         Write-Host ""
-        Write-Host "Paste another link, type aac again, or press Enter with no link to close."
+        Write-Host "Paste another link, type $(Get-Cmd 'aac') again, or press Enter with no link to close."
         continue
     }
 
     if ($Url -notmatch '^https?://((www|m|music)\.)?(youtube\.com|youtu\.be)/') {
         Write-Host ""
-        Write-Mascot "(o_o?)" "That does not look like a YouTube link."
+        Write-Mascot "(o_o?)" "That does not look like a YouTube link." -Color "yellow"
         Write-Host "Copy the full YouTube video link and try again."
         continue
     }
 
     if (Test-YouTubeVideoIdLooksIncomplete -Url $Url) {
         Write-Host ""
-        Write-Mascot "(o_o?)" "That YouTube video ID looks incomplete."
+        Write-Mascot "(o_o?)" "That YouTube video ID looks incomplete." -Color "yellow"
         Write-Host "Copy the full YouTube video link and try again."
         continue
     }
@@ -1234,13 +1429,13 @@ while ($true) {
         $TrackList = @(Get-YouTubeChapterTracks -Metadata $Metadata)
         if ($TrackList.Count -ge 2) {
             $TrackSource = "YouTube chapter markers"
-            Write-Host "Found $($TrackList.Count) YouTube chapter track(s)."
+            Write-Step "Found $($TrackList.Count) YouTube chapter track(s)."
         } else {
             Write-Host "No usable YouTube chapter markers were found. Checking description timestamps..."
             $TrackList = @(Get-DescriptionTimestampChapters -Metadata $Metadata)
             if ($TrackList.Count -ge 2) {
                 $TrackSource = "description timestamps"
-                Write-Host "Found $($TrackList.Count) timestamped track(s) in the description."
+                Write-Step "Found $($TrackList.Count) timestamped track(s) in the description."
             } else {
                 Write-Mascot "(._.)" "No usable description timestamps were found."
             }
@@ -1258,6 +1453,8 @@ while ($true) {
             Write-Host "Paste another link to try again, or press Enter with no link to close."
             continue
         }
+
+        Write-Step "Downloaded album audio."
 
         $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
         Where-Object { $_.Name -notmatch '^\d+\. ' } |
@@ -1306,7 +1503,7 @@ while ($true) {
     }
 
     if (-not (Test-Path -LiteralPath $Cover)) {
-        Write-Mascot "(u_u)" "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art."
+        Write-Mascot "(u_u)" "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art." -Color "yellow"
     }
 
     if ($TrackList.Count -ge 2 -and $FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
@@ -1403,7 +1600,7 @@ for path in sorted(chapter_dir.glob("*.opus")):
     if ($tagExitCode -eq 0) {
         $tagOutput | ForEach-Object { Write-Host $_ }
     } else {
-        Write-Mascot "(;_;)" "Tag fixer failed. Keeping the full-length Opus file if it still exists."
+        Write-Mascot "(;_;)" "Tag fixer failed. Keeping the full-length Opus file if it still exists." -Color "red"
         $tagOutput | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
     }
 
@@ -1423,14 +1620,18 @@ for path in sorted(chapter_dir.glob("*.opus")):
         if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
             Remove-Item -LiteralPath $FullOpus.FullName -Force
         } elseif ($SongCount -gt 0) {
-            Write-Mascot "(;_;)" "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too."
+            Write-Mascot "(;_;)" "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too." -Color "red"
         } else {
             Write-Mascot "(._.)" "No separate song files were created. Keeping the full-length Opus file."
         }
     }
 
+    if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
+        Write-Step "Tagged $SongCount song(s) and embedded album art."
+    }
+
     Write-Host ""
-    Write-Host "$(Get-TableFlipText) Done."
+    Show-TableFlip
     Write-Host "Files are in: $OutDir"
     if ($SongCount -gt 0) {
         Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
@@ -1440,7 +1641,7 @@ for path in sorted(chapter_dir.glob("*.opus")):
     Write-Host ""
     } catch {
         Write-Host ""
-        Write-Mascot "(x_x)" "Something went wrong while processing that link."
+        Write-Mascot "(x_x)" "Something went wrong while processing that link." -Color "red"
         Write-Host $_.Exception.Message
         Write-Host ""
         Write-Host "Paste another link to try again, or press Enter with no link to close."
