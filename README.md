@@ -37,7 +37,7 @@ After a run finishes, songs are saved into a `YouTube Album Splitter Songs` fold
 
 ## Features
 
-- One-file Windows app. No separate installer, setup script, app folder, or helper-file bundle.
+- A single Windows app. No separate installer, setup script, app folder, or helper-file bundle.
 - Self-contained first-run setup: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
 - Prompts for a YouTube link instead of making users edit commands.
 - Lets you process multiple links in one session.
@@ -119,7 +119,7 @@ The result is a release that is easy to share, easy to inspect, and hard to mis-
 
 ## How It Works
 
-The released version is one `.bat` file on purpose. A conventional version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
+A conventional version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
 
 Conceptually, the tool is still organized in layers:
 
