@@ -115,7 +115,7 @@ Paste one link
 Get split and tagged songs
 ```
 
-The result is a release that is easy to share, easy to inspect, and hard to mis-install. Users can split one album upload without installing a Python project, keeping a folder of scripts together, or learning a command-line workflow. The complexity stays in the automation where it belongs; the downloaded artifact stays one file.
+The result is a release that is easy to share, easy to inspect, and hard to mis-install. Users can split one album upload without installing a Python project, keeping a folder of scripts together, or learning a command-line workflow. The complexity stays in the automation where it belongs; the download stays one file.
 
 ## How It Works
 
@@ -241,7 +241,9 @@ If a video does not expose an Opus stream, yt-dlp may fall back to the best avai
 
 ## Optional AAC Conversion
 
-Because Opus is the normal output, AAC conversion is treated as an explicit second step. If you need wider compatibility, type `aac` at the prompt after downloading songs.
+AAC conversion is built into the same app: type `aac` at the prompt and it batch-converts the finished Opus library into tagged `.m4a` files.
+
+![YouTube Album Splitter converting Opus files to AAC in Windows Terminal](assets/aac-conversion.png)
 
 The AAC converter scans the `YouTube Album Splitter Songs` folder for `.opus` files and turns them into `.m4a` AAC files. This is a real audio conversion, so it can take longer than the normal download/split step.
 
