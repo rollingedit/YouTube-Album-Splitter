@@ -73,11 +73,11 @@ function Show-TableFlip {
     )
 
     $lastLen = 0
-    foreach ($frame in $frames) {
+    foreach ($frame in ($frames + $frames)) {
         $pad = if ($lastLen -gt $frame.Length) { ' ' * ($lastLen - $frame.Length) } else { '' }
         Write-Host -NoNewline ("`r$frame$pad")
         $lastLen = [Math]::Max($lastLen, $frame.Length)
-        Start-Sleep -Milliseconds 140
+        Start-Sleep -Milliseconds 220
     }
 
     try { $width = [Console]::WindowWidth } catch { $width = 80 }
@@ -90,6 +90,7 @@ function Show-TableFlip {
     } else {
         Write-Host "$final Done."
     }
+    Start-Sleep -Milliseconds 350
 }
 
 function Get-Colored {
@@ -107,6 +108,64 @@ function Get-Colored {
     }
     $esc = [char]27
     return "$esc[$($codes[$Color])m$Text$esc[0m"
+}
+
+function Get-VisibleLength {
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return 0
+    }
+    $esc = [regex]::Escape([string][char]27)
+    return ($Text -replace "$esc\[[0-9;]*m", "").Length
+}
+
+function Clip-StatusLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][int]$MaxVisibleLength
+    )
+
+    $esc = [char]27
+    $builder = New-Object System.Text.StringBuilder
+    $visible = 0
+    $index = 0
+    $sawAnsi = $false
+
+    while ($index -lt $Text.Length) {
+        if ($Text[$index] -eq $esc) {
+            [void]$builder.Append($Text[$index])
+            $index++
+            if ($index -lt $Text.Length -and $Text[$index] -eq '[') {
+                [void]$builder.Append($Text[$index])
+                $index++
+                while ($index -lt $Text.Length -and $Text[$index] -ne 'm') {
+                    [void]$builder.Append($Text[$index])
+                    $index++
+                }
+                if ($index -lt $Text.Length) {
+                    [void]$builder.Append($Text[$index])
+                    $index++
+                }
+            }
+            $sawAnsi = $true
+            continue
+        }
+
+        if ($visible -ge $MaxVisibleLength) {
+            break
+        }
+
+        [void]$builder.Append($Text[$index])
+        $visible++
+        $index++
+    }
+
+    if ($sawAnsi) {
+        [void]$builder.Append("$esc[0m")
+    }
+
+    return $builder.ToString()
 }
 
 function Write-Step {
@@ -191,7 +250,9 @@ function Invoke-WithMascotStatus {
         [Parameter(Mandatory = $true)][string]$Message,
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
         [object[]]$ArgumentList = @(),
-        [string]$ProgressText = ""
+        [string]$ProgressText = "",
+        [string]$Style = "Blink",
+        [int]$InitialDelayMs = 0
     )
 
     $faces = @(
@@ -207,36 +268,28 @@ function Invoke-WithMascotStatus {
     $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
     $i = 0
     $lastLineLength = 0
+    Initialize-MascotStatusLine
 
     try {
+        if ($InitialDelayMs -gt 0) {
+            Start-Sleep -Milliseconds $InitialDelayMs
+        }
+
         while ($job.State -eq "Running") {
-            try {
-                $width = [Console]::WindowWidth
-            } catch {
-                $width = 80
+            if ($Style -eq "AacTravel") {
+                $line = Get-AacTravelStatusLine -Message $Message -ProgressText $ProgressText -Frame $i
+                Write-RawMascotStatusLine -Line $line -LastLineLength ([ref]$lastLineLength)
+                Start-Sleep -Milliseconds 95
+            } elseif ($Style -eq "PlainProgress") {
+                Write-MascotStatusLine -Message $Message -DotField "" -ProgressText $ProgressText -LastLineLength ([ref]$lastLineLength)
+                Start-Sleep -Milliseconds 140
+            } else {
+                $face = $faces[$i % $faces.Count]
+                $dots = "." * (($i % 4) + 1)
+                $dotField = $dots.PadRight(4)
+                Write-MascotStatusLine -Face $face -Message $Message -DotField $dotField -ProgressText $ProgressText -LastLineLength ([ref]$lastLineLength)
+                Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
             }
-            $maxLineLength = [Math]::Max(20, $width - 1)
-            $face = $faces[$i % $faces.Count]
-            $dots = "." * (($i % 4) + 1)
-            $dotField = $dots.PadRight(4)
-            $progressField = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "$ProgressText " }
-            $prefix = "{0} " -f $face
-            $reservedLength = $prefix.Length + $progressField.Length + $dotField.Length
-            $messageLimit = [Math]::Max(8, $maxLineLength - $reservedLength)
-            $displayMessage = $Message
-            if ($displayMessage.Length -gt $messageLimit) {
-                $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 4)).TrimEnd() + "... "
-            }
-            $line = "{0}{1}{2}{3}" -f $prefix, $progressField, $displayMessage, $dotField
-            if ($line.Length -gt $maxLineLength) {
-                $line = $line.Substring(0, $maxLineLength)
-            }
-            $padLength = if ($lastLineLength -gt $line.Length) { $lastLineLength - $line.Length } else { 0 }
-            $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $line.Length))
-            $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
-            Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
-            $lastLineLength = [Math]::Max($lastLineLength, $line.Length)
-            Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
             $i++
         }
 
@@ -598,7 +651,7 @@ audio.save()
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText (Get-CountText -Current $aacIndex -Total $opusFiles.Count) -ScriptBlock {
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText (Get-CountText -Current $aacIndex -Total $opusFiles.Count) -Style "AacTravel" -ScriptBlock {
                 param([string]$InputPath, [string]$OutputPath)
                 $output = & ffmpeg -hide_banner -y -i $InputPath -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $OutputPath 2>&1
                 [pscustomobject]@{
@@ -738,12 +791,208 @@ function Get-LastDownloadPercent {
     return [double]$matches[$matches.Count - 1].Groups[1].Value
 }
 
+function Initialize-MascotStatusLine {
+    try {
+        $script:MascotStatusLastWidth = [Console]::WindowWidth
+    } catch {
+        $script:MascotStatusLastWidth = 80
+    }
+    $script:MascotStatusLastResizeAt = (Get-Date).AddMilliseconds(-200)
+    $script:MascotStatusResizeCooldownMs = 100
+    $script:MascotStatusWasResizing = $false
+}
+
+function Test-MascotStatusResizeStable {
+    try {
+        $width = [Console]::WindowWidth
+    } catch {
+        $width = 80
+    }
+
+    if (-not $script:MascotStatusResizeCooldownMs) {
+        $script:MascotStatusResizeCooldownMs = 100
+    }
+
+    if (-not $script:MascotStatusLastResizeAt) {
+        $script:MascotStatusLastResizeAt = (Get-Date).AddMilliseconds(-200)
+    }
+
+    if ($script:MascotStatusLastWidth -and $width -ne $script:MascotStatusLastWidth) {
+        $script:MascotStatusLastResizeAt = Get-Date
+        $script:MascotStatusLastWidth = $width
+        $script:MascotStatusWasResizing = $true
+        return $false
+    }
+
+    $script:MascotStatusLastWidth = $width
+    return (((Get-Date) - $script:MascotStatusLastResizeAt).TotalMilliseconds -ge $script:MascotStatusResizeCooldownMs)
+}
+
+function Write-RawMascotStatusLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Line,
+        [Parameter(Mandatory = $true)][ref]$LastLineLength
+    )
+
+    try {
+        $width = [Console]::WindowWidth
+    } catch {
+        $width = 80
+    }
+
+    if (-not (Test-MascotStatusResizeStable)) {
+        return
+    }
+
+    $maxLineLength = [Math]::Max(20, $width - 1)
+    if ($script:MascotStatusWasResizing) {
+        Write-Host -NoNewline ("`r{0}`r" -f (' ' * $maxLineLength))
+        $LastLineLength.Value = 0
+        $script:MascotStatusWasResizing = $false
+    }
+
+    $line = Clip-StatusLine -Text $Line -MaxVisibleLength $maxLineLength
+    $visibleLength = Get-VisibleLength -Text $line
+    $padLength = if ($LastLineLength.Value -gt $visibleLength) { $LastLineLength.Value - $visibleLength } else { 0 }
+    $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $visibleLength))
+    $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
+    Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
+    $LastLineLength.Value = [Math]::Max($LastLineLength.Value, $visibleLength)
+}
+
+function Get-StatusDancer {
+    param([Parameter(Mandatory = $true)][int]$Frame)
+
+    $note = [string][char]0x266A
+    $frames = @(
+        "\(o_o) $note",
+        "\(o_o)/",
+        "$note (o_o)/",
+        "(o_o)"
+    )
+    return Get-Colored -Text $frames[$Frame % $frames.Count] -Color "cyan"
+}
+
+function Get-StatusBlinker {
+    param([Parameter(Mandatory = $true)][int]$Frame)
+
+    $frames = @(
+        " (o_o) ",
+        " (o_o) ",
+        " (-_-) ",
+        " (o_o) ",
+        "( o_-) ",
+        " (o_o) ",
+        " (-_o )",
+        " (o_o) "
+    )
+    return $frames[$Frame % $frames.Count]
+}
+
+function Get-StatusBallAt {
+    param(
+        [Parameter(Mandatory = $true)][int]$Column,
+        [Parameter(Mandatory = $true)][int]$Frame,
+        [int]$Direction = 1,
+        [int]$TrailLength = 2
+    )
+
+    $phases = @([string][char]0x25D0, [string][char]0x25D3, [string][char]0x25D1, [string][char]0x25D2)
+    $phase = $phases[$Frame % $phases.Count]
+    if ($Direction -ge 0) {
+        $trail = [Math]::Min($TrailLength, $Column)
+        return (' ' * ($Column - $trail)) + (Get-Colored -Text (('=' * $trail) + $phase) -Color "cyan")
+    }
+    return (' ' * $Column) + (Get-Colored -Text ($phase + ('=' * $TrailLength)) -Color "cyan")
+}
+
+function Get-AacLandedFace {
+    param(
+        [bool]$Cramped,
+        [int]$Phase,
+        [string]$Side = "Right"
+    )
+
+    if ($Cramped) {
+        $angry = @("(>_<)", "(#>_<)", "(>_<#)", "(#>_<)", "(>_<#)")
+        return Get-Colored -Text $angry[$Phase % $angry.Count] -Color "red"
+    }
+
+    if ($Side -eq "Left") {
+        $left = @("(o_o)", "(o_o)", "(-_-)", "(o_o)", "d(o_o)", "d(o_o)")
+        $face = $left[$Phase % $left.Count]
+        if ($face -eq "d(o_o)") {
+            return Get-Colored -Text $face -Color "green"
+        }
+        return $face
+    }
+
+    $right = @("(o_o)", "(o_o)b", "(o_o)b", "(o_o)b", "(-_-)", "(o_o)", "(o_o)")
+    $face = $right[$Phase % $right.Count]
+    if ($face -eq "(o_o)b") {
+        return Get-Colored -Text $face -Color "green"
+    }
+    return $face
+}
+
+function Get-AacTravelStatusLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$ProgressText,
+        [Parameter(Mandatory = $true)][int]$Frame
+    )
+
+    try {
+        $width = [Console]::WindowWidth
+    } catch {
+        $width = 80
+    }
+
+    $maxLineLength = [Math]::Max(20, $width - 1)
+    $basePrefix = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "$ProgressText " }
+    $minTravelRoom = 14
+    $messageLimit = [Math]::Max(8, $maxLineLength - $basePrefix.Length - $minTravelRoom)
+    $displayMessage = $Message
+    if ($displayMessage.Length -gt $messageLimit) {
+        $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 3)).TrimEnd() + "..."
+    }
+
+    $prefix = "$basePrefix$displayMessage    "
+    $available = $maxLineLength - (Get-VisibleLength -Text $prefix)
+    $zone = [Math]::Max(0, [Math]::Min(20, $available - 7))
+    $cramped = ($available -lt 13 -or $zone -lt 10)
+
+    $leftDwell = 6
+    $rightDwell = if ($cramped) { 7 } else { 7 }
+    $cycleLength = $leftDwell + $zone + $rightDwell + $zone
+    $step = $Frame % $cycleLength
+
+    if ($step -lt $leftDwell) {
+        return $prefix + (Get-AacLandedFace -Cramped $false -Phase $step -Side "Left")
+    }
+
+    $travelRightStep = $step - $leftDwell
+    if ($travelRightStep -lt $zone) {
+        return $prefix + (Get-StatusBallAt -Column ($travelRightStep + 1) -Frame $Frame -Direction 1 -TrailLength 2)
+    }
+
+    $rightDwellStep = $travelRightStep - $zone
+    if ($rightDwellStep -lt $rightDwell) {
+        return $prefix + (' ' * $zone) + (Get-AacLandedFace -Cramped $cramped -Phase $rightDwellStep -Side "Right")
+    }
+
+    $travelLeftStep = $rightDwellStep - $rightDwell
+    $column = [Math]::Max(0, $zone - $travelLeftStep - 1)
+    return $prefix + (Get-StatusBallAt -Column $column -Frame $Frame -Direction -1 -TrailLength 2)
+}
+
 function Write-MascotStatusLine {
     param(
-        [Parameter(Mandatory = $true)][string]$Face,
+        [string]$Face = "",
         [Parameter(Mandatory = $true)][string]$Message,
-        [Parameter(Mandatory = $true)][string]$DotField,
+        [string]$DotField = "",
         [string]$ProgressText = "",
+        [string]$TailText = "",
         [Parameter(Mandatory = $true)][ref]$LastLineLength
     )
 
@@ -754,23 +1003,17 @@ function Write-MascotStatusLine {
     }
     $maxLineLength = [Math]::Max(20, $width - 1)
     $progressSuffix = if ([string]::IsNullOrWhiteSpace($ProgressText)) { "" } else { "   $ProgressText" }
-    $prefix = "{0} " -f $Face
-    $reservedLength = $prefix.Length + $DotField.Length + $progressSuffix.Length
+    $tailSuffix = if ([string]::IsNullOrWhiteSpace($TailText)) { "" } else { "    $TailText" }
+    $prefix = if ([string]::IsNullOrWhiteSpace($Face)) { "" } else { "{0} " -f $Face }
+    $reservedLength = (Get-VisibleLength -Text $prefix) + (Get-VisibleLength -Text $DotField) + (Get-VisibleLength -Text $progressSuffix) + (Get-VisibleLength -Text $tailSuffix)
     $messageLimit = [Math]::Max(8, $maxLineLength - $reservedLength)
     $displayMessage = $Message
     if ($displayMessage.Length -gt $messageLimit) {
         $displayMessage = $displayMessage.Substring(0, [Math]::Max(5, $messageLimit - 4)).TrimEnd() + "... "
     }
 
-    $line = "{0}{1}{2}{3}" -f $prefix, $displayMessage, $DotField, $progressSuffix
-    if ($line.Length -gt $maxLineLength) {
-        $line = $line.Substring(0, $maxLineLength)
-    }
-    $padLength = if ($LastLineLength.Value -gt $line.Length) { $LastLineLength.Value - $line.Length } else { 0 }
-    $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $line.Length))
-    $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
-    Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
-    $LastLineLength.Value = [Math]::Max($LastLineLength.Value, $line.Length)
+    $line = "{0}{1}{2}{3}{4}" -f $prefix, $displayMessage, $DotField, $progressSuffix, $tailSuffix
+    Write-RawMascotStatusLine -Line $line -LastLineLength $LastLineLength
 }
 
 function Clear-MascotStatusLine {
@@ -796,16 +1039,6 @@ function Invoke-YtDlpDownloadProcess {
         throw "yt-dlp is not available."
     }
 
-    $faces = @(
-        ' (o_o) ',
-        ' (o_o) ',
-        ' (-_-) ',
-        ' (o_o) ',
-        '( o_-) ',
-        ' (o_o) ',
-        ' (-_o )',
-        ' (o_o) '
-    )
     $lastLineLength = 0
     $i = 0
     $process = $null
@@ -840,14 +1073,15 @@ function Invoke-YtDlpDownloadProcess {
         [void]$process.Start()
         $process.BeginOutputReadLine()
         $process.BeginErrorReadLine()
+        Initialize-MascotStatusLine
 
         while (-not $process.HasExited) {
             $text = ($captured.ToArray() -join "`n")
             $percent = Get-LastDownloadPercent -Text $text
             $progressText = Get-PercentBar -Percent $percent
-            $face = $faces[$i % $faces.Count]
             $dots = "." * (($i % 4) + 1)
-            Write-MascotStatusLine -Face $face -Message $Message -DotField $dots.PadRight(4) -ProgressText $progressText -LastLineLength ([ref]$lastLineLength)
+            $tailText = if ($null -eq $percent) { Get-StatusBlinker -Frame $i } else { Get-StatusDancer -Frame $i }
+            Write-MascotStatusLine -Message $Message -DotField $dots.PadRight(4) -ProgressText $progressText -TailText $tailText -LastLineLength ([ref]$lastLineLength)
             Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
             $i++
         }
@@ -1249,6 +1483,9 @@ function Invoke-KnownTrackSplit {
     Write-Host "Splitting $($tracks.Count) track(s) from $SourceName..."
 
     $createdFiles = @()
+    $splitLastLineLength = 0
+    Initialize-MascotStatusLine
+
     for ($i = 0; $i -lt $tracks.Count; $i++) {
         $trackNumber = $i + 1
         $trackTitle = $tracks[$i].Title
@@ -1264,27 +1501,16 @@ function Invoke-KnownTrackSplit {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegResult = Invoke-WithMascotStatus -Message "Splitting track: $trackTitle" -ProgressText (Get-CountText -Current $trackNumber -Total $tracks.Count) -ScriptBlock {
-                param(
-                    [double]$StartSeconds,
-                    [string]$InputPath,
-                    [double]$DurationSeconds,
-                    [string]$OutputPath
-                )
-                $output = & ffmpeg -hide_banner -y -ss $StartSeconds -i $InputPath -t $DurationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $OutputPath 2>&1
-                [pscustomobject]@{
-                    Output = @($output)
-                    ExitCode = $LASTEXITCODE
-                }
-            } -ArgumentList @($startSeconds, $FullOpusPath, $durationSeconds, $outputPath)
-            $ffmpegOutput = @($ffmpegResult.Output)
-            $ffmpegExitCode = $ffmpegResult.ExitCode
+            Write-MascotStatusLine -Message "Splitting track: $trackTitle" -DotField "" -ProgressText (Get-CountText -Current $trackNumber -Total $tracks.Count) -LastLineLength ([ref]$splitLastLineLength)
+            $ffmpegOutput = @(& ffmpeg -hide_banner -y -ss $startSeconds -i $FullOpusPath -t $durationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $outputPath 2>&1)
+            $ffmpegExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
         $createdFile = Get-Item -LiteralPath $outputPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -ne 0 -or -not $createdFile -or $createdFile.Length -le 0) {
+            Clear-MascotStatusLine -LastLineLength $splitLastLineLength
             Write-Mascot "(>_<)" "Could not split track: $trackTitle" -Color "red"
             $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
             foreach ($file in $createdFiles) {
@@ -1301,6 +1527,7 @@ function Invoke-KnownTrackSplit {
         $createdFiles += $outputPath
     }
 
+    Clear-MascotStatusLine -LastLineLength $splitLastLineLength
     Write-Step "Split $($createdFiles.Count) track(s)."
     return $true
 }
@@ -1442,7 +1669,6 @@ while ($true) {
         }
 
         Write-Host ""
-        Write-Host "Downloading album audio..."
 
         $DownloadSucceeded = Invoke-YtDlpDownloadFullAudio -Url $Url -OutDir $OutDir -TrackCount $TrackList.Count
         if (-not $DownloadSucceeded) {

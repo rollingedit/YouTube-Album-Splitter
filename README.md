@@ -45,7 +45,8 @@ After a run finishes, songs are saved into a `YouTube Album Splitter Songs` fold
 - Prefers YouTube's best available Opus audio.
 - Splits the video into separate song files using YouTube chapter markers or description timestamps.
 - Shows live terminal progress while downloading, splitting, tagging, and converting, with a download progress bar and real `current/total` counts while splitting and converting.
-- Adds color and small animated touches in the terminal: color-coded status faces, a light-blue highlight on the `aac` and `yes` commands, green checkmarks as each step finishes, and a table-flip flourish when a run completes (with a plain-text fallback for terminals without color).
+- Uses small terminal animations so long steps do not look frozen: a blinking status face while work is preparing, an animated download character once the progress bar appears, an AAC conversion animation, and a table-flip flourish when a run completes.
+- Adds color to make the terminal easier to scan: color-coded status faces, a light-blue highlight on the `aac` and `yes` commands, and green checkmarks as each step finishes (with a plain-text fallback for terminals without color).
 - Creates numbered filenames like `1. Song Name.opus`.
 - Creates an album folder from the YouTube title when it can, like `Artist - Album`.
 - Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
@@ -120,7 +121,7 @@ What each part does:
 - **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
 - **winget**: Windows package installer used to install missing helper tools automatically.
 
-yt-dlp handles the initial thumbnail and full-audio download, shown as a percentage progress bar. The tool then splits known tracks with FFmpeg so the terminal can show real `current/total` progress. After that, it re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
+yt-dlp handles the initial thumbnail and full-audio download, shown as a percentage progress bar. The tool then splits known tracks with FFmpeg so the terminal can show real `current/total` progress. Status animations are only there to make waiting clearer; the actual progress counts come from the detected tracks and the running download. After that, it re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
 
 The same internal pieces handle the optional AAC path. If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg creates 192 kbps `.m4a` files and strips leftover chapter/data streams so each AAC file behaves like a normal single song. Mutagen then writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after their AAC replacements are created and tagged successfully.
 
