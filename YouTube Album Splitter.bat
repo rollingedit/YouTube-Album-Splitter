@@ -404,7 +404,7 @@ function Ensure-Command {
 
     Refresh-Path
     if (Get-Command $Command -ErrorAction SilentlyContinue) {
-        Write-Host "$Name found."
+        Write-Step "$Name found."
         return
     }
 
@@ -421,7 +421,7 @@ function Ensure-Command {
         throw "$Name was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
     }
 
-    Write-Host "$Name installed."
+    Write-Step "$Name installed."
 }
 
 function Resolve-PythonCommand {
@@ -466,7 +466,7 @@ function Resolve-PythonCommand {
 function Ensure-PythonCommand {
     $script:PythonCommand = Resolve-PythonCommand
     if ($script:PythonCommand) {
-        Write-Host "Python found."
+        Write-Step "Python found."
         return
     }
 
@@ -484,7 +484,7 @@ function Ensure-PythonCommand {
         throw "Python was installed, but Windows has not exposed it in PATH yet. Close this window and run this file again."
     }
 
-    Write-Host "Python installed."
+    Write-Step "Python installed."
 }
 
 function Invoke-Python {
