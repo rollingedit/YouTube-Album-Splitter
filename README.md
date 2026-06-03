@@ -87,18 +87,9 @@ For description fallback, the tool requires at least two timestamps, the first t
 
 ## Automatic Setup
 
-To make that one-file workflow work on a fresh Windows machine, the tool checks for the helper programs it needs and installs missing ones automatically:
+On first run, the script checks for yt-dlp, FFmpeg, Python, and the Python tagging library it needs. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
 
-- yt-dlp, for downloading from YouTube.
-- FFmpeg, for audio conversion, chapter splitting, and cover extraction.
-- Python, for final Opus metadata and album-art tagging.
-- Deno, only when needed: yt-dlp uses it for YouTube's JavaScript challenge solver on some videos. It is no longer installed up front. If a download fails in a way that looks like it needs the solver, the tool sets Deno up and retries once.
-
-On a normal machine it installs these with `winget`. If `winget` is unavailable (for example, the Microsoft Store is turned off by Group Policy), it falls back to setting tools up another way: yt-dlp, FFmpeg, and `mutagen` through Python's `pip` (and Deno, only if a later download needs it, through its official installer). The one tool that cannot install itself this way is Python, so if `winget` is unavailable and Python is missing, the tool prints a short guide to install Python by hand, then sets up everything else automatically the next time you run it.
-
-For Python, the tool tries existing `py -3`, `python`, and `python3` commands and uses one only if it is Python 3.10 or newer (the minimum for current yt-dlp and `ffmpeg-downloader`). If no Python is found, or the only one present is older than 3.10, it sets up a current Python: with `winget` it installs/updates to Python 3.12 automatically (alongside any older copy, which it leaves untouched); without `winget` it shows a short guide to install Python 3.10 or newer by hand, then continues on the next run.
-
-It also installs the Python metadata library `mutagen` only if it is missing. It does not reinstall it every run.
+Deno is installed only if a download appears to need YouTube’s JavaScript challenge solver. It is skipped on normal runs.
 
 The exact package IDs, network destinations, file locations, and uninstall commands are collected later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run is doing.
 
@@ -261,9 +252,9 @@ If conversion fails for a file, the original `.opus` file is kept.
 
 ## Requirements
 
-Windows is required.
+Windows is required. On Windows 10 and Windows 11 systems, the script can set up its helper tools automatically with winget.
 
-Most Windows 10 and Windows 11 computers already include `winget`. If yours does not, the tool does not need it: it sets up yt-dlp, FFmpeg, and Deno another way (Python's `pip`, and Deno's official installer when a download needs it). On an ordinary PC the setup guide also points you to update **App Installer** in the Microsoft Store (it prints the link rather than opening it), since that restores `winget` and the normal automatic path; on a PC where the Store is turned off (for example, by Group Policy) it acknowledges that and does not suggest using the Store. The one tool it cannot install without `winget` is Python itself, so if `winget` is unavailable and Python is missing, it prints a short guide with a link to install Python, then continues automatically the next time you run the file.
+If winget is unavailable, the script can still set up most helper tools through Python. If Python is also missing, it prints manual Python install instructions and continues automated setup on the next run.
 
 ## Important
 
@@ -286,9 +277,9 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 
 ## CI Validation Harness
 
-Releases are now validated with a private CI harness before public tagging. The harness covers static integrity checks, dependency-path simulation, parser behavior, metadata handling, mock end-to-end runs, fixture end-to-end runs, regression testing, terminal behavior, cleanup safety, conversion safety, retry behavior, rollback behavior, and failure-path handling.
+Before public tagging, releases are checked with a private CI harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
 
-The public app stays simple: one downloadable Windows script. The private harness pressure-tests the complex parts behind that simplicity, including first-run setup, PATH recovery, timestamp parsing, output naming, terminal rendering, conversion edge cases, and failures found during previous releases.
+The harness exists so the public release can stay simple: one downloadable Windows script, with the more fragile setup and media-processing paths tested before release.
 
 ## Security, Privacy, and System Changes
 
