@@ -878,10 +878,12 @@ function Remove-StaleAacWorkFiles {
     }
 }
 
-function Stop-LiveAacStatusLine {
-    # Clear the single in-place AAC status line (if one is currently drawn) so a
-    # permanent message can be printed beneath it, then reset the continuation state
-    # so the next conversion animates on a fresh line rather than marching downward.
+function Reset-AacStatusLine {
+    # Two jobs, both needed between conversions: (1) take down the in-place AAC status
+    # line if one is currently drawn, so a permanent message (a "Replacing..." note or
+    # an error) can be printed cleanly beneath it; (2) re-arm the status subsystem
+    # (continuation length, resize tracking, hidden caret) so the next conversion
+    # animates on a fresh line rather than marching downward.
     param([Parameter(Mandatory = $true)][ref]$IsLive)
 
     if ($IsLive.Value) {
@@ -1019,6 +1021,10 @@ audio.save()
     Initialize-MascotStatusLine
     $aacStatusLive = $false
 
+    # Wrap the loop so the shared status line is retired and the caret restored no
+    # matter how we leave it: normal finish, a continue after a per-file error, or a
+    # mid-loop throw (for example a locked file during a move).
+    try {
     foreach ($opus in $opusFiles) {
         $aacIndex++
         $aacPath = [System.IO.Path]::ChangeExtension($opus.FullName, ".m4a")
@@ -1027,7 +1033,7 @@ audio.save()
         $backupAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".$aacWorkId.backup.m4a")
         $hadExistingAac = $false
         if (Test-Path -LiteralPath $aacPath) {
-            Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
+            Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
             Write-Host "Replacing existing AAC: $([System.IO.Path]::GetFileName($aacPath))"
             Move-Item -LiteralPath $aacPath -Destination $backupAacPath -Force
             $hadExistingAac = $true
@@ -1071,7 +1077,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
+                Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
                 $tagOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
@@ -1097,7 +1103,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
-                Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
+                Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
             }
@@ -1111,15 +1117,18 @@ audio.save()
         if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
             Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
         }
-        Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
+        Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
         Write-Mascot "(>_<)" "Could not convert: $($opus.Name)" -Color "red"
         Write-Host "Kept original Opus file."
         $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
     }
-
-    if ($aacStatusLive) {
-        Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
-        $aacStatusLive = $false
+    }
+    finally {
+        if ($aacStatusLive) {
+            Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
+            $aacStatusLive = $false
+        }
+        Set-MascotCursorVisible $true
     }
 
     Write-Host ""
