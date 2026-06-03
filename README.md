@@ -284,6 +284,12 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 - **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
 - **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the best low-friction option is usually to try again later, try another network/browser session, or use a video that does not require verification.
 
+## CI Validation Harness
+
+Releases are now validated with a private CI harness before public tagging. The harness covers static integrity checks, dependency-path simulation, parser behavior, metadata handling, mock end-to-end runs, fixture end-to-end runs, regression testing, terminal behavior, cleanup safety, conversion safety, retry behavior, rollback behavior, and failure-path handling.
+
+The public app stays simple: one downloadable Windows script. The private harness pressure-tests the complex parts behind that simplicity, including first-run setup, PATH recovery, timestamp parsing, output naming, terminal rendering, conversion edge cases, and failures found during previous releases.
+
 ## Security, Privacy, and System Changes
 
 This project is open source, and the release download is the same plain-text `.bat` script from this repo. The release exists to make downloading easier for beginners.
