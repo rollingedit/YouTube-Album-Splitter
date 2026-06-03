@@ -4,7 +4,7 @@ Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link.
 
 ![YouTube Album Splitter running in Windows Terminal](assets/screenshot.png)
 
-You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app — without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
+            You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
 
 The tedious part was never just downloading audio. It was everything after that: splitting one long upload into tracks, naming the files cleanly, embedding album art, setting track numbers, fixing artist and album metadata, avoiding playlist surprises, and producing an output folder that is ready for your music library.
 
@@ -17,7 +17,7 @@ Paste one link
 Get split and tagged songs
 ```
 
-The released `.bat` handles that whole pipeline end to end — dependency setup, download, split, tag, album art, cleanup — and then lets you paste another upload without restarting. Any helper scripts it needs are created temporarily by the tool itself.
+The released `.bat` handles that whole pipeline end to end dependency setup, download, split, tag, album art, cleanup, and then lets you paste another upload without restarting. Any helper scripts it needs are created temporarily by the tool itself.
 
 Everything happens on your own machine: audio comes in from the link you paste, finished files are written next to the `.bat`, and nothing about your library is uploaded anywhere. The whole tool is a single plain-text file you can read before you run it, and it is open source.
 
@@ -121,7 +121,7 @@ For description fallback, the tool requires at least two timestamps, the first t
 
 On first run, the script checks for yt-dlp, FFmpeg, Python, and the Python tagging library it needs. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
 
-Deno is installed only on demand — if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
+Deno is installed only on demand, if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
 
 The exact package IDs, network destinations, file locations, and uninstall commands are listed later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run does.
 
@@ -202,7 +202,7 @@ The tool is built so a failed or interrupted run never costs you anything you al
 
 ## Output Details
 
-The goal is that finished tracks drop straight into a music app looking like a real album — correct names and order, embedded cover art, and no leftover junk tags. Each successful song file is cleaned up like this:
+The goal is that finished tracks drop straight into a music app looking like a real album with correct names and order, embedded cover art, and no leftover junk tags. Each successful song file is cleaned up like this:
 
 ```text
 Folder:        YouTube Album Splitter Songs\Artist - Album
@@ -231,7 +231,7 @@ Artist and album naming is based on the YouTube title. It works best when titles
 Artist - Album
 ```
 
-The dash can be a normal hyphen, en dash, or em dash. The tool also strips common extra upload text — things like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, and trailing years. For example, this title:
+The dash can be a normal hyphen, en dash, or em dash. The tool also strips common extra upload text, things like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, and trailing years. For example, this title:
 
 ```text
 Example Artist - Example Album (Instrumental) - Full Album 2024
@@ -306,8 +306,8 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 * **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
 * **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the lowest-friction path is to try again later, try another network/browser session, or use a video that does not require verification.
 
-The release script is deliberately defensive: a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs its own dependencies, isolates the selected video, validates timestamp sources, retries recoverable failures, preserves originals during conversion, and surfaces edge cases as readable failure modes rather than crashing out — the kind of logic normally spread across several separate scripts, kept here in one file.
-
+The release script is deliberately defensive: a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs its own dependencies, isolates the selected video, validates timestamp sources, retries recoverable failures, preserves originals during conversion, and surfaces edge cases as readable failure modes rather than crashing out, the kind of logic normally spread across several separate scripts, kept here in one file.
+   
 ## Private CI Validation Harness
 
 Before public tagging, releases are checked with a private CI validation harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
