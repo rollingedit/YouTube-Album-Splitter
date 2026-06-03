@@ -1,4 +1,4 @@
-﻿# YouTube Album Splitter
+# YouTube Album Splitter
 
 Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link. Get separate song files.
 
@@ -6,13 +6,18 @@ Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link.
 
 YouTube Album Splitter is a self-contained Windows app packaged as a single `.bat` file. It turns a timestamped YouTube album upload you own or have permission to use into separate song files automatically, with no manual setup.
 
-The tedious part before this was not just downloading audio. It was everything after that: splitting one long upload into tracks, renaming track files, adding album art, setting track numbers, fixing artist/album metadata, avoiding playlist surprises, and making the output folder look like something you can actually drop into a music app.
+The tedious part was never just downloading audio. It was everything after that: splitting one long upload into tracks, naming the files cleanly, embedding album art, setting track numbers, fixing artist and album metadata, avoiding playlist surprises, and producing an output folder that is ready to drop into a music app.
 
-This tool does all of that automatically. The automation behind it is custom-built, then deliberately packed into one double-click `.bat` file so it stays easy to use. No command-line setup, no manual installs, no copying commands, no extracted app folder, and no separate helper files to keep track of. Any helper scripts it needs are created temporarily by the tool itself.
+This tool automates that full path while keeping the user flow deliberately simple:
 
-That single-file app design is the point. The release `.bat` checks dependencies, repairs missing tools when it can, runs the download and media pipeline, tags the finished songs, and keeps the user in one paste-link flow.
+```text
+Download one BAT
+Double-click
+Paste one link
+Get split and tagged songs
+```
 
-It handles the download, splitting, album art, smart folder naming, metadata cleanup, temporary-file cleanup, and repeat prompts.
+The released `.bat` checks dependencies, repairs missing tools when it can, downloads the audio, splits it into tracks, embeds album art, fixes metadata, cleans up temporary files, and lets you process another upload without restarting. Any helper scripts it needs are created temporarily by the tool itself.
 
 It saves files like:
 
@@ -33,45 +38,47 @@ It is designed for album-style YouTube uploads that have track timestamps. It us
 5. Press Enter.
 6. Paste another link to process another upload, type `aac` to convert existing Opus files to AAC `.m4a`, or press Enter with no link to close.
 
-After a run finishes, songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together. The rest of this README spells out what the tool does during that one paste-link flow.
+After a run finishes, songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together.
 
 ## Features
 
-- A single Windows app. No separate installer, setup script, app folder, or helper-file bundle.
-- Self-contained first-run setup: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
-- Prompts for a YouTube link instead of making users edit commands.
-- Lets you process multiple links in one session.
-- Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
-- Rejects obvious non-YouTube links immediately, instead of wasting time updating tools.
-- Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
-- Treats each pasted link as one selected video, even if the URL includes a playlist.
-- Prefers YouTube's best available Opus audio.
-- Splits the video into separate song files using YouTube chapter markers or description timestamps.
-- Shows live terminal progress while downloading, splitting, tagging, and converting, with a download progress bar and real `current/total` counts while splitting and converting.
-- Uses small terminal animations so long steps do not look frozen: a blinking status face while work is preparing, an animated download character once the progress bar appears, an AAC conversion animation, and a table-flip flourish when a run completes.
-- Adds color to make the terminal easier to scan: color-coded status faces, a light-blue highlight on the `aac` and `yes` commands, and green checkmarks as each step finishes (with a plain-text fallback for terminals without color).
-- Creates numbered filenames like `1. Song Name.opus`.
-- Creates an album folder from the YouTube title when it can, like `Artist - Album`.
-- Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
-- Falls back to a generic folder/name when the YouTube title cannot be parsed.
-- Embeds album art into every split song file.
-- Crops album art to a centered 1:1 square so there are no black bars.
-- Sets each title tag to the proper song name, like `Song Name`.
-- Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
-- Sets each track number tag to the correct number, like `1`.
-- Removes genre metadata so files are not mislabeled.
-- Deletes temporary files after the final tracks are finished.
-- Keeps the full audio file only if no usable chapter markers or description timestamps are found, so the output folder is never empty.
+* Single Windows app packaged as one `.bat` file.
+* No separate installer, setup script, app folder, or helper-file bundle.
+* Self-contained first-run setup: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
+* Prompts for a YouTube link instead of making users edit commands.
+* Lets you process multiple links in one session.
+* Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
+* Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
+* Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
+* Treats each pasted link as one selected video, even if the URL includes a playlist.
+* Prefers YouTube's best available Opus audio.
+* Splits the video into separate song files using YouTube chapter markers or description timestamps.
+* Shows live terminal progress while downloading, splitting, tagging, and converting.
+* Displays a download progress bar and real `current/total` counts while splitting and converting.
+* Uses small terminal animations so long steps do not look frozen: a blinking status face while work is preparing, an animated download character once the progress bar appears, an AAC conversion animation, and a table-flip flourish when a run completes.
+* Adds color to make the terminal easier to scan: color-coded status faces, a light-blue highlight on the `aac` and `yes` commands, and green checkmarks as each step finishes, with a plain-text fallback for terminals without color.
+* Creates numbered filenames like `1. Song Name.opus`.
+* Creates an album folder from the YouTube title when it can, like `Artist - Album`.
+* Removes common extra title text like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, years, and bracket tags from the folder/album name when possible.
+* Falls back to a generic folder/name when the YouTube title cannot be parsed.
+* Embeds album art into every split song file.
+* Crops album art to a centered 1:1 square so there are no black bars.
+* Sets each title tag to the proper song name, like `Song Name`.
+* Sets album and artist metadata when the YouTube title follows a clear `Artist - Album` style.
+* Sets each track number tag to the correct number, like `1`.
+* Removes genre metadata so files are not mislabeled.
+* Deletes temporary files after the final tracks are finished.
+* Keeps the full audio file only if no usable chapter markers or description timestamps are found, so the output folder is never empty.
 
 ## Timestamp Splitting
 
-The split behavior from the feature list follows a strict order:
+The split behavior follows a strict order:
 
 1. YouTube chapter markers from the video.
 2. Timestamp lines in the video description.
 3. Full audio fallback if no usable track times are found.
 
-Before downloading, the tool reads the video metadata and counts the usable tracks. It then downloads the full audio once and does the actual track splitting itself with FFmpeg. That keeps the split order the same while letting the progress display show real track counts during the split.
+Before downloading, the tool reads the video metadata and counts the usable tracks. It then downloads the full audio once and performs the actual track splitting with FFmpeg. That keeps the output order predictable while letting the terminal show real track counts during the split.
 
 Description timestamps can look like:
 
@@ -91,28 +98,28 @@ On first run, the script checks for yt-dlp, FFmpeg, Python, and the Python taggi
 
 Deno is installed only if a download appears to need YouTube’s JavaScript challenge solver. It is skipped on normal runs.
 
-The exact package IDs, network destinations, file locations, and uninstall commands are collected later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run is doing.
+The exact package IDs, network destinations, file locations, and uninstall commands are listed later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run does.
 
 ## Why It Is One File
 
-The single-file release is the product.
+The single-file release is the product design.
 
-The released `.bat` carries the package manager logic, terminal UI, media pipeline, metadata pipeline, retry engine, and dependency resolver inside one inspectable file. That gives users an app-like experience while keeping the normal path as simple as:
+The released `.bat` carries the package manager logic, terminal UI, media pipeline, metadata pipeline, retry engine, and dependency resolver inside one inspectable file. That gives users an app-like workflow while keeping the normal path simple:
 
 ```text
-Download one BAT
+Download one file
 Double-click
-Paste one link
-Get split and tagged songs
+Paste link
+Get song files
 ```
 
-The result is a release that is easy to share, easy to inspect, and hard to mis-install. Users can split one album upload without installing a Python project, keeping a folder of scripts together, or learning a command-line workflow. The complexity stays in the automation where it belongs; the download stays one file.
+A multi-file project layout would be easier internally, but worse for the intended user flow. Normal users should not have to install a Python project, keep several helper scripts together, configure a shell, copy commands, or understand the media stack just to split one timestamped album upload.
+
+The complexity stays inside the automation. The release stays one file.
 
 ## How It Works
 
-A conventional version could be split into separate files, but that would make normal users download and keep multiple scripts together. Instead, the file hides that complexity while still using a few small internal layers.
-
-Conceptually, the tool is still organized in layers:
+Internally, the tool is organized in layers even though the release is one `.bat` file:
 
 ```text
 BAT launcher
@@ -123,27 +130,22 @@ BAT launcher
 
 What each part does:
 
-- **BAT**: Windows double-click entrypoint. Starts everything without requiring the user to open a terminal.
-- **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
-- **yt-dlp**: Reads video metadata, downloads the selected YouTube audio, and embeds the initial thumbnail/metadata.
-- **FFmpeg**: Media backend for audio extraction, controlled track splitting, square cover cropping, and stream processing.
-- **Python**: Runs only after Python exists. It is used for final metadata cleanup.
-- **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
-- **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support.
-- **winget**: Windows package installer used to install missing helper tools automatically.
+* **BAT**: Windows double-click entrypoint. Starts everything without requiring the user to open a terminal manually.
+* **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
+* **yt-dlp**: Reads video metadata, downloads the selected YouTube audio, and embeds the initial thumbnail/metadata.
+* **FFmpeg**: Media backend for audio extraction, controlled track splitting, square cover cropping, and stream processing.
+* **Python**: Runs only after Python exists. It is used for final metadata cleanup.
+* **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
+* **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support when needed.
+* **winget**: Windows package installer used to install missing helper tools automatically.
 
-yt-dlp handles the initial thumbnail and full-audio download, shown as a percentage progress bar. The tool then splits known tracks with FFmpeg so the terminal can show real `current/total` progress. Status animations are only there to make waiting clearer; the actual progress counts come from the detected tracks and the running download. After that, it re-applies the final square cover art during metadata cleanup so Opus music players read it reliably.
+yt-dlp handles the initial metadata read, thumbnail handling, and full-audio download. The download is shown as a percentage progress bar. After that, the tool splits known tracks with FFmpeg so the terminal can show real `current/total` progress instead of pretending the split is one opaque operation.
 
-The same internal pieces handle the optional AAC path. If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg creates 192 kbps `.m4a` files and strips leftover chapter/data streams so each AAC file behaves like a normal single song. Mutagen then writes M4A-native tags and reads the embedded Opus cover art directly into M4A-native square album art. The original Opus files are removed only after their AAC replacements are created and tagged successfully.
+Status animations are only terminal UI. The actual progress counts come from detected tracks and active download/conversion steps.
 
-So the internal design is modular, but the released user experience stays simple:
+After splitting, the tool re-applies the final square cover art during metadata cleanup so Opus music players read the embedded art reliably.
 
-```text
-Download one file
-Double-click
-Paste link
-Get song files
-```
+The same internal pieces handle the optional AAC path. If you type `aac` at the prompt, the tool first shows how many Opus files and album folders it found, then asks you to type `yes` before converting. FFmpeg creates 192 kbps `.m4a` files and strips leftover chapter/data streams so each AAC file behaves like a normal single song. Mutagen then writes M4A-native tags and copies the embedded Opus cover art into M4A-native square album art. The original Opus files are removed only after their AAC replacements are created and tagged successfully.
 
 ## Reliability Features
 
@@ -151,23 +153,25 @@ YouTube changes often, so the script includes a recovery path.
 
 If the first download attempt fails, it automatically updates the main download tools and retries once:
 
-- yt-dlp
-- FFmpeg
-- Deno
+* yt-dlp
+* FFmpeg
+* Deno
 
 If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
 
 If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same update/retry path.
 
-This update step is not guaranteed to fix every failure. It is there because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is obviously not a YouTube link, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification. Private videos, age restrictions, region locks, and internet issues are handled as readable failures instead of silent exits.
+This update step exists because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is obviously not a YouTube link, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification.
+
+Private videos, age restrictions, region locks, bot checks, sign-in requirements, and internet failures are handled as readable failures instead of silent exits.
 
 If the retry still fails, the tool shows a plain-language message with common causes, such as:
 
-- Private, deleted, age-restricted, or region-locked video.
-- YouTube asking this machine for sign-in or extra verification.
-- Playlist or channel link without a specific video selected.
-- Blocked or unstable internet connection.
-- A new YouTube change that needs a future yt-dlp update.
+* Private, deleted, age-restricted, or region-locked video.
+* YouTube asking this machine for sign-in or extra verification.
+* Playlist or channel link without a specific video selected.
+* Blocked or unstable internet connection.
+* A new YouTube change that needs a future yt-dlp update.
 
 ## Output Details
 
@@ -208,7 +212,13 @@ Artist - Album (Instrumental) - Full Album 2024
 Artist - Album (Instrumental Only) - Full EP 2024
 ```
 
-For example, `Example Artist - Example Album (Instrumental) - Full Album 2024` becomes:
+For example, this title:
+
+```text
+Example Artist - Example Album (Instrumental) - Full Album 2024
+```
+
+becomes:
 
 ```text
 Artist: Example Artist
@@ -232,7 +242,7 @@ If a video does not expose an Opus stream, yt-dlp may fall back to the best avai
 
 ## Optional AAC Conversion
 
-AAC conversion is built into the same app: type `aac` at the prompt and it batch-converts the finished Opus library into tagged `.m4a` files.
+AAC conversion is built into the same app. Type `aac` at the prompt and it batch-converts the finished Opus library into tagged `.m4a` files.
 
 ![YouTube Album Splitter converting Opus files to AAC in Windows Terminal](assets/aac-conversion.png)
 
@@ -240,19 +250,21 @@ The AAC converter scans the `YouTube Album Splitter Songs` folder for `.opus` fi
 
 During conversion, the tool:
 
-- creates an audio-only `.m4a` file,
-- strips leftover chapter/data streams so the file behaves like one normal song,
-- reads the embedded square Opus cover art directly,
-- writes M4A-native title, artist, album, album artist, track number, and cover art tags,
-- safely replaces any matching `.m4a` from an earlier run,
-- deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully,
-- cleans up leftover temporary AAC work files from interrupted or older conversion runs.
+* creates an audio-only `.m4a` file,
+* strips leftover chapter/data streams so the file behaves like one normal song,
+* reads the embedded square Opus cover art directly,
+* writes M4A-native title, artist, album, album artist, track number, and cover art tags,
+* safely replaces any matching `.m4a` from an earlier run,
+* deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully,
+* cleans up leftover temporary AAC work files from interrupted or older conversion runs.
 
 If conversion fails for a file, the original `.opus` file is kept.
 
 ## Requirements
 
-Windows is required. On Windows 10 and Windows 11 systems, the script can set up its helper tools automatically with winget.
+Windows is required.
+
+On Windows 10 and Windows 11 systems, the script can set up its helper tools automatically with winget.
 
 If winget is unavailable, the script can still set up most helper tools through Python. If Python is also missing, it prints manual Python install instructions and continues automated setup on the next run.
 
@@ -262,24 +274,24 @@ This works best with YouTube videos that have either chapter markers on the prog
 
 Use this only for content you own, created, or have permission to download and process.
 
-Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is a normal Windows security limitation for small unsigned projects, not proof that something is wrong. If you trust the file, click **More info** then **Run anyway**.
+Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is expected for small unsigned projects. If you trust the file, click **More info** then **Run anyway**.
 
 ## Design Choices
 
 This project intentionally prioritizes a one-file, double-click Windows workflow over cross-platform command-line packaging.
 
-- **Windows only**: the goal is a familiar Windows download-and-run experience, not a tool that asks users to install a language runtime, configure a shell, or manage command-line flags.
-- **One BAT release**: helper code is embedded so normal users do not have to keep multiple files together.
-- **Explicit track times only**: the tool uses YouTube chapters first, then description timestamps. It does not guess tracks from silence by default because false splits are worse than keeping the full audio.
-- **Automatic helper setup**: first run may install required tools through `winget` and `pip` so users do not have to set them up manually.
-- **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
-- **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the best low-friction option is usually to try again later, try another network/browser session, or use a video that does not require verification.
+* **Windows only**: the goal is a familiar Windows download-and-run experience without asking users to install a language runtime, configure a shell, or manage command-line flags.
+* **One BAT release**: helper code is embedded so normal users do not have to keep multiple files together.
+* **Explicit track times only**: the tool uses YouTube chapters first, then description timestamps. It does not guess tracks from silence by default because false splits are worse than keeping the full audio.
+* **Automatic helper setup**: first run may install required tools through `winget` and `pip` so users do not have to set them up manually.
+* **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
+* **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the lowest-friction path is to try again later, try another network/browser session, or use a video that does not require verification.
 
-## CI Validation Harness
+## Private CI Validation Harness
 
-Before public tagging, releases are checked with a private CI harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
+Before public tagging, releases are checked with a private CI validation harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
 
-The harness exists so the public release can stay simple: one downloadable Windows script, with the more fragile setup and media-processing paths tested before release.
+The harness exists so the public release can stay simple: one downloadable Windows script, with the fragile setup, parsing, tagging, conversion, cleanup, and failure paths tested before release.
 
 ## Security, Privacy, and System Changes
 
@@ -298,7 +310,7 @@ Python.Python.3.12
 DenoLand.Deno
 ```
 
-Installed through `pip` (always for `mutagen`, and as the `winget`-free fallback for yt-dlp and FFmpeg):
+Installed through `pip`:
 
 ```text
 mutagen
@@ -307,17 +319,23 @@ curl-cffi
 ffmpeg-downloader
 ```
 
-`ffmpeg-downloader` fetches a static FFmpeg/ffprobe build and is only used when `winget` is unavailable. `yt-dlp[default]` and `curl-cffi` are also used on the retry/repair path when the active `yt-dlp` appears to be a Python-installed version. Deno is installed only on demand (via `winget`, or its official installer when `winget` is unavailable) the first time a download needs YouTube's JavaScript challenge solver.
+`mutagen` is used for metadata handling.
+
+`yt-dlp[default]` and `curl-cffi` are used on the retry/repair path when the active `yt-dlp` appears to be a Python-installed version.
+
+`ffmpeg-downloader` is used only when `winget` is unavailable and the script needs a Python-based FFmpeg setup path.
+
+Deno is installed only on demand, either through `winget` or its official installer, the first time a download needs YouTube's JavaScript challenge solver.
 
 ### Network Access
 
 The script may contact:
 
-- YouTube / YouTube Music, through `yt-dlp`, to read video data and download audio.
-- GitHub, when `yt-dlp` downloads its external JavaScript challenge-solving component.
-- Microsoft `winget` package sources, when installing or upgrading dependencies.
-- Python package indexes, when installing `mutagen`, repairing a Python-installed `yt-dlp`, or (without `winget`) setting up yt-dlp and FFmpeg.
-- `deno.land`, only when Deno is set up on demand without `winget`.
+* YouTube / YouTube Music, through `yt-dlp`, to read video data and download audio.
+* GitHub, when `yt-dlp` downloads its external JavaScript challenge-solving component.
+* Microsoft `winget` package sources, when installing or upgrading dependencies.
+* Python package indexes, when installing `mutagen`, repairing a Python-installed `yt-dlp`, or setting up yt-dlp and FFmpeg without `winget`.
+* `deno.land`, only when Deno is set up on demand without `winget`.
 
 The script does not upload your files anywhere. It downloads audio from the link you provide and writes the finished files locally.
 
@@ -348,7 +366,7 @@ During processing, a temporary `cover.jpg` may be created inside the album folde
 
 The script refreshes `PATH` only inside its own running PowerShell window so newly installed tools can be found immediately. It may also add the standard Windows app execution alias folder to that in-window `PATH` so it can reliably find `winget`.
 
-It does not directly edit your permanent system or user `PATH`. However, tools installed through `winget` may add themselves to `PATH` through their normal installers.
+It does not directly edit your permanent system or user `PATH`. Tools installed through `winget` may add themselves to PATH through their normal installers.
 
 ### How To Inspect Before Running
 
@@ -391,7 +409,13 @@ py -3 -m pip uninstall yt-dlp curl-cffi
 py -3 -m pip uninstall ffmpeg-downloader
 ```
 
-If Deno was set up without `winget`, it lives in `%USERPROFILE%\.deno`; remove that folder to uninstall it. If FFmpeg was set up with `ffmpeg-downloader`, run `ffdl remove --all` before uninstalling the package to delete its downloaded binaries.
+If Deno was set up without `winget`, it lives in `%USERPROFILE%\.deno`; remove that folder to uninstall it.
+
+If FFmpeg was set up with `ffmpeg-downloader`, run this before uninstalling the package to delete its downloaded binaries:
+
+```powershell
+ffdl remove --all
+```
 
 ## License
 
