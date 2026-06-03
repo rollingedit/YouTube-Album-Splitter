@@ -4,7 +4,7 @@ Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link.
 
 ![YouTube Album Splitter running in Windows Terminal](assets/screenshot.png)
 
-            You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
+You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
 
 The tedious part was never just downloading audio. It was everything after that: splitting one long upload into tracks, naming the files cleanly, embedding album art, setting track numbers, fixing artist and album metadata, avoiding playlist surprises, and producing an output folder that is ready for your music library.
 
