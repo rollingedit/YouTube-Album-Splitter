@@ -287,6 +287,8 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 * **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
 * **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the lowest-friction path is to try again later, try another network/browser session, or use a video that does not require verification.
 
+The release script is deliberately defensive: it is a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs dependencies, refreshes the current-session tool path, handles multiple installer and fallback paths, normalizes YouTube inputs, isolates the selected video from playlist side effects, validates timestamp sources, retries recoverable tool failures, preserves originals during conversion, cleans temporary artifacts, and treats edge cases as readable failure modes instead of silent exits. The result is a one-file user flow backed by dependency resolution, state repair, metadata handling, conversion safety, and media-processing logic normally spread across several separate scripts.
+
 ## Private CI Validation Harness
 
 Before public tagging, releases are checked with a private CI validation harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
