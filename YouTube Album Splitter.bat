@@ -287,7 +287,9 @@ function Invoke-WithMascotStatus {
         [object[]]$ArgumentList = @(),
         [string]$ProgressText = "",
         [string]$Style = "Blink",
-        [int]$InitialDelayMs = 0
+        [int]$InitialDelayMs = 0,
+        [switch]$NoClearOnComplete,
+        [switch]$SkipStatusInit
     )
 
     $faces = @(
@@ -301,9 +303,19 @@ function Invoke-WithMascotStatus {
         ' (o_o) '
     )
     $job = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList
-    $i = 0
-    $lastLineLength = 0
-    Initialize-MascotStatusLine
+    $continueSplitAnimation = $NoClearOnComplete -and $SkipStatusInit
+    if ($continueSplitAnimation) {
+        $i = $script:ContinuedMascotAnimFrame
+        $lastLineLength = $script:ContinuedMascotLastLineLength
+    } else {
+        $i = 0
+        $lastLineLength = 0
+    }
+    $lastLineLengthRef = [ref]$lastLineLength
+
+    if (-not $SkipStatusInit) {
+        Initialize-MascotStatusLine
+    }
 
     try {
         if ($InitialDelayMs -gt 0) {
@@ -313,27 +325,36 @@ function Invoke-WithMascotStatus {
         while ($job.State -eq "Running") {
             if ($Style -eq "AacTravel") {
                 $line = Get-AacTravelStatusLine -Message $Message -ProgressText $ProgressText -Frame $i
-                Write-RawMascotStatusLine -Line $line -LastLineLength ([ref]$lastLineLength)
+                Write-RawMascotStatusLine -Line $line -LastLineLength $lastLineLengthRef
                 Start-Sleep -Milliseconds 95
             } elseif ($Style -eq "PlainProgress") {
-                Write-MascotStatusLine -Message $Message -DotField "" -ProgressText $ProgressText -LastLineLength ([ref]$lastLineLength)
+                $dots = "." * (($i % 4) + 1)
+                $dotField = $dots.PadRight(4)
+                Write-MascotStatusLine -Message $Message -DotField $dotField -ProgressText $ProgressText -LastLineLength $lastLineLengthRef
                 Start-Sleep -Milliseconds 140
             } else {
                 $face = $faces[$i % $faces.Count]
                 $dots = "." * (($i % 4) + 1)
                 $dotField = $dots.PadRight(4)
-                Write-MascotStatusLine -Face $face -Message $Message -DotField $dotField -ProgressText $ProgressText -LastLineLength ([ref]$lastLineLength)
+                Write-MascotStatusLine -Face $face -Message $Message -DotField $dotField -ProgressText $ProgressText -LastLineLength $lastLineLengthRef
                 Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
             }
             $i++
         }
 
-        try {
-            $width = [Console]::WindowWidth
-        } catch {
-            $width = 80
+        if ($continueSplitAnimation) {
+            $script:ContinuedMascotAnimFrame = $i
+            $script:ContinuedMascotLastLineLength = $lastLineLengthRef.Value
         }
-        Write-Host -NoNewline ("`r{0}`r" -f (' ' * ([Math]::Min($width - 1, $lastLineLength + 1))))
+        if (-not $NoClearOnComplete) {
+            try {
+                $width = [Console]::WindowWidth
+            } catch {
+                $width = 80
+            }
+            Write-ConsoleStatusOverwrite -Text (' ' * ([Math]::Min($width - 1, $lastLineLengthRef.Value + 1)))
+            Advance-ConsoleLineAfterStatus
+        }
 
         $result = Receive-Job -Job $job
         if ($job.State -eq "Failed") {
@@ -1171,6 +1192,36 @@ function Test-MascotStatusResizeStable {
     return (((Get-Date) - $script:MascotStatusLastResizeAt).TotalMilliseconds -ge $script:MascotStatusResizeCooldownMs)
 }
 
+function Write-ConsoleStatusOverwrite {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+
+    try {
+        if (-not [Console]::IsOutputRedirected) {
+            $top = [Console]::CursorTop
+            [Console]::SetCursorPosition(0, $top)
+            [Console]::Write($Text)
+            return
+        }
+    } catch {}
+
+    Write-Host -NoNewline ("`r{0}" -f $Text)
+}
+
+function Advance-ConsoleLineAfterStatus {
+    try {
+        if (-not [Console]::IsOutputRedirected) {
+            $top = [Console]::CursorTop
+            $nextTop = [Math]::Min($top + 1, [Console]::WindowHeight - 1)
+            [Console]::SetCursorPosition(0, $nextTop)
+            return
+        }
+    } catch {}
+
+    Write-Host ""
+}
+
 function Write-RawMascotStatusLine {
     param(
         [Parameter(Mandatory = $true)][string]$Line,
@@ -1189,7 +1240,7 @@ function Write-RawMascotStatusLine {
 
     $maxLineLength = [Math]::Max(20, $width - 1)
     if ($script:MascotStatusWasResizing) {
-        Write-Host -NoNewline ("`r{0}`r" -f (' ' * $maxLineLength))
+        Write-ConsoleStatusOverwrite -Text (' ' * $maxLineLength)
         $LastLineLength.Value = 0
         $script:MascotStatusWasResizing = $false
     }
@@ -1199,7 +1250,7 @@ function Write-RawMascotStatusLine {
     $padLength = if ($LastLineLength.Value -gt $visibleLength) { $LastLineLength.Value - $visibleLength } else { 0 }
     $padLength = [Math]::Min($padLength, [Math]::Max(0, $maxLineLength - $visibleLength))
     $pad = if ($padLength -gt 0) { ' ' * $padLength } else { '' }
-    Write-Host -NoNewline ("`r{0}{1}" -f $line, $pad)
+    Write-ConsoleStatusOverwrite -Text ($line + $pad)
     $LastLineLength.Value = [Math]::Max($LastLineLength.Value, $visibleLength)
 }
 
@@ -1367,7 +1418,8 @@ function Clear-MascotStatusLine {
     } catch {
         $width = 80
     }
-    Write-Host -NoNewline ("`r{0}`r" -f (' ' * ([Math]::Min($width - 1, $LastLineLength + 1))))
+    Write-ConsoleStatusOverwrite -Text (' ' * ([Math]::Min($width - 1, $LastLineLength + 1)))
+    Advance-ConsoleLineAfterStatus
 }
 
 function Invoke-YtDlpDownloadProcess {
@@ -1425,7 +1477,7 @@ function Invoke-YtDlpDownloadProcess {
             $dots = "." * (($i % 4) + 1)
             $tailText = if ($null -eq $percent) { Get-StatusBlinker -Frame $i } else { Get-StatusDancer -Frame $i }
             Write-MascotStatusLine -Message $Message -DotField $dots.PadRight(4) -ProgressText $progressText -TailText $tailText -LastLineLength ([ref]$lastLineLength)
-            Start-Sleep -Milliseconds (Get-Random -Minimum 120 -Maximum 700)
+            Start-Sleep -Milliseconds 160
             $i++
         }
 
@@ -1802,7 +1854,8 @@ function Invoke-KnownTrackSplit {
     Write-Host "Splitting $($tracks.Count) track(s) from $SourceName..."
 
     $createdFiles = @()
-    $splitLastLineLength = 0
+    $script:ContinuedMascotAnimFrame = 0
+    $script:ContinuedMascotLastLineLength = 0
     Initialize-MascotStatusLine
 
     for ($i = 0; $i -lt $tracks.Count; $i++) {
@@ -1820,16 +1873,28 @@ function Invoke-KnownTrackSplit {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            Write-MascotStatusLine -Message "Splitting track: $trackTitle" -DotField "" -ProgressText (Get-CountText -Current $trackNumber -Total $tracks.Count) -LastLineLength ([ref]$splitLastLineLength)
-            $ffmpegOutput = @(& ffmpeg -hide_banner -y -ss $startSeconds -i $FullOpusPath -t $durationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $outputPath 2>&1)
-            $ffmpegExitCode = $LASTEXITCODE
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Splitting track: $trackTitle" -ProgressText (Get-CountText -Current $trackNumber -Total $tracks.Count) -NoClearOnComplete -SkipStatusInit -ScriptBlock {
+                param(
+                    [double]$StartSeconds,
+                    [string]$InputPath,
+                    [double]$DurationSeconds,
+                    [string]$OutputPath
+                )
+                $output = & ffmpeg -hide_banner -y -ss $StartSeconds -i $InputPath -t $DurationSeconds -map "0:a:0" -vn -dn -sn -map_metadata -1 -map_chapters -1 -c:a copy $OutputPath 2>&1
+                [pscustomobject]@{
+                    Output = @($output)
+                    ExitCode = $LASTEXITCODE
+                }
+            } -ArgumentList @($startSeconds, $FullOpusPath, $durationSeconds, $outputPath)
+            $ffmpegOutput = @($ffmpegResult.Output)
+            $ffmpegExitCode = $ffmpegResult.ExitCode
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
 
         $createdFile = Get-Item -LiteralPath $outputPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -ne 0 -or -not $createdFile -or $createdFile.Length -le 0) {
-            Clear-MascotStatusLine -LastLineLength $splitLastLineLength
+            Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
             Write-Mascot "(>_<)" "Could not split track: $trackTitle" -Color "red"
             $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
             foreach ($file in $createdFiles) {
@@ -1846,7 +1911,7 @@ function Invoke-KnownTrackSplit {
         $createdFiles += $outputPath
     }
 
-    Clear-MascotStatusLine -LastLineLength $splitLastLineLength
+    Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
     Write-Step "Split $($createdFiles.Count) track(s)."
     return $true
 }
@@ -1877,6 +1942,51 @@ function Get-SafeName {
         return "Unknown Album"
     }
     return $safe
+}
+
+function Remove-LiteralPathLong {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $extended = $null
+    if (-not $Path.StartsWith('\\?\')) {
+        if ($Path.StartsWith('\\')) {
+            $extended = '\\?\UNC' + $Path.Substring(1)
+        } else {
+            $extended = '\\?\' + $Path
+        }
+    }
+
+    $candidates = if ($Path.Length -ge 240 -and $extended) {
+        @($extended, $Path)
+    } elseif ($extended) {
+        @($Path, $extended)
+    } else {
+        @($Path)
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        foreach ($candidate in $candidates) {
+            try {
+                if ([System.IO.File]::Exists($candidate)) {
+                    [System.IO.File]::Delete($candidate)
+                    return
+                }
+            } catch {}
+
+            try {
+                Remove-Item -LiteralPath $candidate -Force -ErrorAction Stop
+                return
+            } catch {}
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 }
 
 function Get-AlbumInfoFromTitle {
@@ -2369,7 +2479,9 @@ while ($true) {
         Write-Mascot "(u_u)" "Warning: could not extract album art. Tags will still be fixed, but songs may not show cover art." -Color "yellow"
     }
 
-    if ($TrackList.Count -ge 2 -and $FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+    # Do not gate split on Test-Path for $FullOpus.FullName: Windows returns $false for
+    # paths over MAX_PATH even when the file exists. $FullOpus already came from Get-ChildItem.
+    if ($TrackList.Count -ge 2 -and $FullOpus) {
         Write-Host ""
         Invoke-KnownTrackSplit -Tracks $TrackList -OutDir $OutDir -FullOpusPath $FullOpus.FullName -SourceName $TrackSource | Out-Null
     }
@@ -2479,9 +2591,9 @@ for path in sorted(chapter_dir.glob("*.opus")):
         Where-Object { $_.Name -match '^\d+\. ' } |
         Measure-Object).Count
 
-    if ($FullOpus -and (Test-Path -LiteralPath $FullOpus.FullName)) {
+    if ($FullOpus) {
         if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
-            Remove-Item -LiteralPath $FullOpus.FullName -Force
+            Remove-LiteralPathLong -Path $FullOpus.FullName
         } elseif ($SongCount -gt 0) {
             Write-Mascot "(;_;)" "Separate song files exist, but tag cleanup did not finish successfully. Keeping the full-length Opus file too." -Color "red"
         } else {
