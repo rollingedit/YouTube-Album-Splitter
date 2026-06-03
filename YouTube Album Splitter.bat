@@ -234,8 +234,7 @@ function Get-CountText {
         [Parameter(Mandatory = $true)][int]$Total
     )
 
-    $digits = ([string]$Total).Length
-    return "({0}/{1})" -f $Current.ToString().PadLeft($digits), $Total
+    return "({0}/{1})" -f $Current, $Total
 }
 
 function Write-Mascot {
@@ -879,6 +878,20 @@ function Remove-StaleAacWorkFiles {
     }
 }
 
+function Stop-LiveAacStatusLine {
+    # Clear the single in-place AAC status line (if one is currently drawn) so a
+    # permanent message can be printed beneath it, then reset the continuation state
+    # so the next conversion animates on a fresh line rather than marching downward.
+    param([Parameter(Mandatory = $true)][ref]$IsLive)
+
+    if ($IsLive.Value) {
+        Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
+        $IsLive.Value = $false
+    }
+    $script:ContinuedMascotLastLineLength = 0
+    Initialize-MascotStatusLine
+}
+
 function Convert-ExistingOpusToAac {
     param([Parameter(Mandatory = $true)][string]$Root)
 
@@ -998,6 +1011,14 @@ audio.save()
     $deleted = 0
     $aacIndex = 0
 
+    # Keep every conversion on one in-place status line (like the splitting step)
+    # instead of clearing and advancing after each file, which marched the line down
+    # the window one row per song.
+    $script:ContinuedMascotAnimFrame = 0
+    $script:ContinuedMascotLastLineLength = 0
+    Initialize-MascotStatusLine
+    $aacStatusLive = $false
+
     foreach ($opus in $opusFiles) {
         $aacIndex++
         $aacPath = [System.IO.Path]::ChangeExtension($opus.FullName, ".m4a")
@@ -1006,6 +1027,7 @@ audio.save()
         $backupAacPath = Join-Path $opus.DirectoryName ("." + $opus.BaseName + ".$aacWorkId.backup.m4a")
         $hadExistingAac = $false
         if (Test-Path -LiteralPath $aacPath) {
+            Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
             Write-Host "Replacing existing AAC: $([System.IO.Path]::GetFileName($aacPath))"
             Move-Item -LiteralPath $aacPath -Destination $backupAacPath -Force
             $hadExistingAac = $true
@@ -1015,7 +1037,7 @@ audio.save()
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText (Get-CountText -Current $aacIndex -Total $opusFiles.Count) -Style "AacTravel" -ScriptBlock {
+            $ffmpegResult = Invoke-WithMascotStatus -Message "Converting AAC: $($opus.Name)" -ProgressText (Get-CountText -Current $aacIndex -Total $opusFiles.Count) -Style "AacTravel" -NoClearOnComplete -SkipStatusInit -ScriptBlock {
                 param([string]$InputPath, [string]$OutputPath)
                 $output = & ffmpeg -hide_banner -y -i $InputPath -map "0:a:0" -vn -dn -sn -map_chapters -1 -map_metadata -1 -c:a aac -b:a 192k $OutputPath 2>&1
                 [pscustomobject]@{
@@ -1028,6 +1050,7 @@ audio.save()
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
         }
+        $aacStatusLive = $true
 
         $tempAacFile = Get-Item -LiteralPath $tempAacPath -ErrorAction SilentlyContinue
         if ($ffmpegExitCode -eq 0 -and $tempAacFile -and $tempAacFile.Length -gt 0) {
@@ -1048,6 +1071,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
+                Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
                 $tagOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
@@ -1073,6 +1097,7 @@ audio.save()
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
                     Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
                 }
+                Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
             }
@@ -1086,9 +1111,15 @@ audio.save()
         if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
             Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
         }
+        Stop-LiveAacStatusLine -IsLive ([ref]$aacStatusLive)
         Write-Mascot "(>_<)" "Could not convert: $($opus.Name)" -Color "red"
         Write-Host "Kept original Opus file."
         $ffmpegOutput | Select-Object -Last 6 | ForEach-Object { Write-Host $_ }
+    }
+
+    if ($aacStatusLive) {
+        Clear-MascotStatusLine -LastLineLength $script:ContinuedMascotLastLineLength
+        $aacStatusLive = $false
     }
 
     Write-Host ""
@@ -1155,6 +1186,21 @@ function Get-LastDownloadPercent {
     return [double]$matches[$matches.Count - 1].Groups[1].Value
 }
 
+function Set-MascotCursorVisible {
+    # Single owner for the status-line caret. It is hidden while a status line
+    # animates (so the caret does not blink next to the moving mascot) via
+    # Initialize-MascotStatusLine, and shown again when the line ends via
+    # Advance-ConsoleLineAfterStatus. The main loop also shows it before every prompt,
+    # which is the one backstop that covers any sequence that ended early or threw.
+    param([Parameter(Mandatory = $true)][bool]$Visible)
+
+    try {
+        if (-not [Console]::IsOutputRedirected) {
+            [Console]::CursorVisible = $Visible
+        }
+    } catch {}
+}
+
 function Initialize-MascotStatusLine {
     try {
         $script:MascotStatusLastWidth = [Console]::WindowWidth
@@ -1164,6 +1210,7 @@ function Initialize-MascotStatusLine {
     $script:MascotStatusLastResizeAt = (Get-Date).AddMilliseconds(-200)
     $script:MascotStatusResizeCooldownMs = 100
     $script:MascotStatusWasResizing = $false
+    Set-MascotCursorVisible $false
 }
 
 function Test-MascotStatusResizeStable {
@@ -1202,6 +1249,11 @@ function Write-ConsoleStatusOverwrite {
             $top = [Console]::CursorTop
             [Console]::SetCursorPosition(0, $top)
             [Console]::Write($Text)
+            # If a fast resize shrank the window between measuring the width and this
+            # write, the line can wrap and leave the cursor on the next row. Pull it
+            # back to the row we wrote on so the next frame overwrites in place instead
+            # of marching downward one row per frame.
+            try { [Console]::SetCursorPosition(0, $top) } catch {}
             return
         }
     } catch {}
@@ -1209,7 +1261,34 @@ function Write-ConsoleStatusOverwrite {
     Write-Host -NoNewline ("`r{0}" -f $Text)
 }
 
+function Clear-ConsoleStatusResidue {
+    # Resize recovery: blank the status row and the row just below it (where a
+    # wrapped fragment can land when the window was narrowed mid-write), then return
+    # the cursor to the status row. Without wiping the row below, a fast narrow/wide
+    # resize spam can strand leftover line fragments under the live status line.
+    param([Parameter(Mandatory = $true)][int]$MaxLineLength)
+
+    $blank = ' ' * $MaxLineLength
+    try {
+        if (-not [Console]::IsOutputRedirected) {
+            $top = [Console]::CursorTop
+            [Console]::SetCursorPosition(0, $top)
+            [Console]::Write($blank)
+            $below = $top + 1
+            if ($below -lt [Console]::BufferHeight) {
+                [Console]::SetCursorPosition(0, $below)
+                [Console]::Write($blank)
+            }
+            [Console]::SetCursorPosition(0, $top)
+            return
+        }
+    } catch {}
+
+    Write-Host -NoNewline ("`r{0}" -f $blank)
+}
+
 function Advance-ConsoleLineAfterStatus {
+    Set-MascotCursorVisible $true
     try {
         if (-not [Console]::IsOutputRedirected) {
             $top = [Console]::CursorTop
@@ -1240,7 +1319,7 @@ function Write-RawMascotStatusLine {
 
     $maxLineLength = [Math]::Max(20, $width - 1)
     if ($script:MascotStatusWasResizing) {
-        Write-ConsoleStatusOverwrite -Text (' ' * $maxLineLength)
+        Clear-ConsoleStatusResidue -MaxLineLength $maxLineLength
         $LastLineLength.Value = 0
         $script:MascotStatusWasResizing = $false
     }
@@ -2339,6 +2418,10 @@ $script:AlbumsThisSession = 0
 $script:PendingCelebration = 0
 
 while ($true) {
+    # Status lines hide the caret while they animate; guarantee it is back before any
+    # prompt, even if the previous step ended while a status line was still hidden.
+    Set-MascotCursorVisible $true
+
     if ($script:PendingCelebration -gt 0) {
         Show-AlbumCelebration -AlbumCount $script:PendingCelebration
         $script:PendingCelebration = 0
