@@ -4,7 +4,7 @@ Self-contained Windows app. One `.bat` file. Double-click. Paste a YouTube link.
 
 ![YouTube Album Splitter running in Windows Terminal](assets/screenshot.png)
 
-You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
+You found an album you own posted as one long, timestamped YouTube video, and you want it as proper, individually named, tagged tracks in your music app — without learning yt-dlp, FFmpeg, or the command line. That is what this does: paste the link, get a clean album folder of separate songs.
 
 The tedious part was never just downloading audio. It was everything after that: splitting one long upload into tracks, naming the files cleanly, embedding album art, setting track numbers, fixing artist and album metadata, avoiding playlist surprises, and producing an output folder that is ready for your music library.
 
@@ -17,7 +17,7 @@ Paste one link
 Get split and tagged songs
 ```
 
-The released `.bat` handles that whole pipeline end to end dependency setup, download, split, tag, album art, cleanup, and then lets you paste another upload without restarting. Any helper scripts it needs are created temporarily by the tool itself.
+The released `.bat` handles that whole pipeline end to end — dependency setup, download, split, tag, album art, cleanup — and then lets you paste another upload without restarting. Any helper scripts it needs are created temporarily by the tool itself.
 
 Everything happens on your own machine: audio comes in from the link you paste, finished files are written next to the `.bat`, and nothing about your library is uploaded anywhere. The whole tool is a single plain-text file you can read before you run it, and it is open source.
 
@@ -65,17 +65,19 @@ It is designed for album-style YouTube uploads that have track timestamps. It us
 
 After a run finishes, songs are saved into a `YouTube Album Splitter Songs` folder next to the `.bat` file. Each pasted link gets its own album subfolder, so uploads do not mix together.
 
+At startup, the tool checks that this output folder is writable and tells you to move the BAT to a normal user folder if Windows blocks writes there.
+
 ## Features
 
 * Single Windows app packaged as one `.bat` file.
 * No separate installer, setup script, app folder, or helper-file bundle.
-* Self-contained first-run setup: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
+* Self-contained setup after a real action is chosen: the `.bat` checks the tools it needs, uses `winget` when available, and has fallback paths for locked-down machines.
 * Prompts for a YouTube link instead of making users edit commands.
 * Lets you process multiple links in one session.
 * Lets you type `aac` from the same prompt to convert existing Opus files in the output folder to AAC `.m4a` for apps/devices that need AAC.
-* Rejects obvious non-YouTube links immediately instead of wasting time updating tools.
+* Rejects obvious non-YouTube links and YouTube links that do not point to one selected video before checking or updating tools.
 * Accepts normal YouTube, mobile YouTube, YouTube Music, and `youtu.be` links.
-* Treats each pasted link as one selected video, even if the URL includes a playlist.
+* Treats each accepted pasted link as one selected video, even if the video URL includes a playlist parameter.
 * Prefers YouTube's best available Opus audio.
 * Splits the video into separate song files using YouTube chapter markers or description timestamps.
 * Shows live terminal progress while downloading, splitting, tagging, and converting.
@@ -115,13 +117,13 @@ Description timestamps can look like:
 Song Name [17:34]
 ```
 
-For description fallback, the tool requires at least two timestamps, the first timestamp must be `0:00`, and times must increase in order. This keeps the fallback useful for normal album descriptions without guessing track breaks.
+For description fallback, the tool requires at least two timestamps, the first timestamp must be `0:00`, timestamp seconds must be valid, and times must increase in order. This keeps the fallback useful for normal album descriptions without guessing track breaks.
 
 ## Automatic Setup
 
-On first run, the script checks for yt-dlp, FFmpeg, Python, and the Python tagging library it needs. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
+After you paste a valid YouTube video link, the script checks for yt-dlp, FFmpeg, Python, and the Python tagging library it needs. If you type `aac`, it checks only the tools needed for AAC conversion. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
 
-Deno is installed only on demand, if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
+Deno is installed only on demand — if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
 
 The exact package IDs, network destinations, file locations, and uninstall commands are listed later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run does.
 
@@ -152,8 +154,8 @@ What each part does:
 * **PowerShell**: Main controller. Handles prompts, dependency checks, automatic installs, PATH refresh, URL validation, yt-dlp calls, folder cleanup, retry/update behavior, and the loop for another link.
 * **yt-dlp**: Reads video metadata, downloads the selected YouTube audio, and embeds the initial thumbnail/metadata.
 * **FFmpeg**: Media backend for audio extraction, controlled track splitting, square cover cropping, and stream processing.
-* **Python**: Runs only after Python exists. It is used for final metadata cleanup.
-* **mutagen**: Python metadata library used to edit Opus/Ogg tags and embed cover art correctly.
+* **Python**: Runs only after Python exists. It is used for final metadata cleanup when split tracks or AAC conversion need tagging.
+* **mutagen**: Python metadata library used to edit Opus/Ogg and M4A tags and embed cover art correctly.
 * **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support when needed.
 * **winget**: Windows package installer used to install missing helper tools automatically.
 
@@ -179,7 +181,7 @@ If the active `yt-dlp` appears to be a Python-installed version, it also repairs
 
 If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same update/retry path.
 
-This update step exists because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is obviously not a YouTube link, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification.
+This update step exists because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is not one selected YouTube video, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification.
 
 Private videos, age restrictions, region locks, bot checks, sign-in requirements, and internet failures are handled as readable failures instead of silent exits.
 
@@ -198,11 +200,12 @@ The tool is built so a failed or interrupted run never costs you anything you al
 * It does not delete the source audio until the separate tracks have been split and tagged successfully. If any step fails, the full-length file is kept.
 * AAC conversion writes each `.m4a` to a temporary file and only swaps it into place once the audio and tags are written. If a conversion fails, the original `.opus` is left untouched.
 * If a video has no usable chapter markers or description timestamps, it keeps the full audio rather than leaving you an empty folder.
+* If AAC conversion is interrupted while replacing an older `.m4a`, the next conversion run repairs leftover backup files before continuing.
 * When something does go wrong, the tool tells you in plain language which files it kept, so you are never left guessing about your data.
 
 ## Output Details
 
-The goal is that finished tracks drop straight into a music app looking like a real album with correct names and order, embedded cover art, and no leftover junk tags. Each successful song file is cleaned up like this:
+The goal is that finished tracks drop straight into a music app looking like a real album — correct names and order, embedded cover art, and no leftover junk tags. Each successful song file is cleaned up like this:
 
 ```text
 Folder:        YouTube Album Splitter Songs\Artist - Album
@@ -231,7 +234,7 @@ Artist and album naming is based on the YouTube title. It works best when titles
 Artist - Album
 ```
 
-The dash can be a normal hyphen, en dash, or em dash. The tool also strips common extra upload text, things like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, and trailing years. For example, this title:
+The dash can be a normal hyphen, en dash, or em dash. The tool also strips common extra upload text — things like `(Instrumental)`, `(Instrumental Only)`, `Full Album`, `Full EP`, and trailing years. For example, this title:
 
 ```text
 Example Artist - Example Album (Instrumental) - Full Album 2024
@@ -275,7 +278,7 @@ During conversion, the tool:
 * writes M4A-native title, artist, album, album artist, track number, and cover art tags,
 * safely replaces any matching `.m4a` from an earlier run,
 * deletes the original `.opus` only after the matching `.m4a` is created and tagged successfully,
-* cleans up leftover temporary AAC work files from interrupted or older conversion runs.
+* repairs leftover AAC backup files and cleans up temporary AAC work files from interrupted or older conversion runs.
 
 If conversion fails for a file, the original `.opus` file is kept.
 
@@ -291,6 +294,8 @@ If winget is unavailable, the script can still set up most helper tools through 
 
 This works best with YouTube videos that have either chapter markers on the progress bar or clear timestamp lines in the description. If neither is available, the tool keeps the full-length audio file rather than producing nothing.
 
+This tool is for one selected YouTube video at a time. It does not process whole playlists or channels, and it does not infer track breaks from silence.
+
 Use this only for content you own, created, or have permission to download and process.
 
 Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is expected for small unsigned projects. If you trust the file, click **More info** then **Run anyway**.
@@ -302,12 +307,12 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 * **Windows only**: the goal is a familiar Windows download-and-run experience without asking users to install a language runtime, configure a shell, or manage command-line flags.
 * **One BAT release**: helper code is embedded so normal users do not have to keep multiple files together.
 * **Explicit track times only**: the tool uses YouTube chapters first, then description timestamps. It does not guess tracks from silence by default because false splits are worse than keeping the full audio.
-* **Automatic helper setup**: first run may install required tools through `winget` and `pip` so users do not have to set them up manually.
+* **Automatic helper setup**: after a valid video link or `aac` command, the run may install required tools through `winget` and `pip` so users do not have to set them up manually.
 * **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
 * **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the lowest-friction path is to try again later, try another network/browser session, or use a video that does not require verification.
 
-The release script is deliberately defensive: a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs its own dependencies, isolates the selected video, validates timestamp sources, retries recoverable failures, preserves originals during conversion, and surfaces edge cases as readable failure modes rather than crashing out, the kind of logic normally spread across several separate scripts, kept here in one file.
-   
+The release script is deliberately defensive: a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs its own dependencies, isolates the selected video, validates timestamp sources, retries recoverable failures, preserves originals during conversion, and surfaces edge cases as readable failure modes rather than crashing out — the kind of logic normally spread across several separate scripts, kept here in one file.
+
 ## Private CI Validation Harness
 
 Before public tagging, releases are checked with a private CI validation harness. It validates static integrity, dependency-path behavior, timestamp parsing, metadata handling, mock and fixture end-to-end runs, cleanup safety, conversion safety, retry behavior, rollback behavior, and known failure paths.
@@ -387,7 +392,7 @@ During processing, a temporary `cover.jpg` may be created inside the album folde
 
 The script refreshes `PATH` only inside its own running PowerShell window so newly installed tools can be found immediately. It may also add the standard Windows app execution alias folder to that in-window `PATH` so it can reliably find `winget`.
 
-It does not directly edit your permanent system or user `PATH`. Tools installed through `winget` may add themselves to PATH through their normal installers.
+It does not directly edit your permanent system or user `PATH`. Tools installed through `winget` may add themselves to PATH through their normal installers. The Python FFmpeg fallback uses `ffmpeg-downloader --add-path`, which may ask that helper to add FFmpeg to user PATH.
 
 ### How To Inspect Before Running
 

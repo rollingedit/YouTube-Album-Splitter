@@ -1,6 +1,6 @@
 @echo off
 set "BAT_PATH=%~f0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:BAT_PATH; $c=Get-Content -LiteralPath $p -Raw; $m='# POWERSHELL_' + 'PAYLOAD'; $parts=$c -split [regex]::Escape($m),2; Invoke-Expression $parts[1]"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:BAT_PATH; $c=Get-Content -LiteralPath $p -Raw -Encoding UTF8; $m='# POWERSHELL_' + 'PAYLOAD'; $parts=$c -split [regex]::Escape($m),2; if ($parts.Count -lt 2) { throw 'POWERSHELL_PAYLOAD marker not found.' }; & ([scriptblock]::Create($parts[1]))"
 set "ERR=%ERRORLEVEL%"
 if not "%ERR%"=="0" (
     echo.
@@ -277,6 +277,59 @@ function Test-YouTubeVideoIdLooksIncomplete {
 
     $videoId = Get-YouTubeVideoIdFromUrl -Url $Url
     return (-not [string]::IsNullOrWhiteSpace($videoId)) -and ($videoId -notmatch '^[A-Za-z0-9_-]{11}$')
+}
+
+function Resolve-YouTubeVideoUrl {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $result = [ordered]@{
+        Valid = $false
+        VideoId = ""
+        NormalizedUrl = ""
+        Message = ""
+        Tip = "Copy the full YouTube video link and try again."
+    }
+
+    try {
+        $uri = [Uri]$Url
+    } catch {
+        $result.Message = "That does not look like a valid URL."
+        return [pscustomobject]$result
+    }
+
+    if ($uri.Scheme -notin @("http", "https")) {
+        $result.Message = "That does not look like a YouTube link."
+        return [pscustomobject]$result
+    }
+
+    $urlHost = $uri.Host.ToLowerInvariant()
+    $isYouTubeHost = $urlHost -eq "youtube.com" -or
+        $urlHost -eq "www.youtube.com" -or
+        $urlHost -eq "m.youtube.com" -or
+        $urlHost -eq "music.youtube.com" -or
+        $urlHost -eq "youtu.be"
+
+    if (-not $isYouTubeHost) {
+        $result.Message = "That does not look like a YouTube link."
+        return [pscustomobject]$result
+    }
+
+    $videoId = Get-YouTubeVideoIdFromUrl -Url $Url
+    if ([string]::IsNullOrWhiteSpace($videoId)) {
+        $result.Message = "That YouTube link does not point to one selected video."
+        $result.Tip = "Open the video itself, then copy its link."
+        return [pscustomobject]$result
+    }
+
+    if ($videoId -notmatch '^[A-Za-z0-9_-]{11}$') {
+        $result.Message = "That YouTube video ID looks incomplete."
+        return [pscustomobject]$result
+    }
+
+    $result.Valid = $true
+    $result.VideoId = $videoId
+    $result.NormalizedUrl = "https://www.youtube.com/watch?v=$videoId"
+    return [pscustomobject]$result
 }
 
 function Invoke-WithMascotStatus {
@@ -830,6 +883,47 @@ function Install-FfmpegViaPip {
     Refresh-Path
 }
 
+function Ensure-DownloadPipeline {
+    if ($script:DownloadPipelineReady) {
+        return
+    }
+
+    Write-Host "Checking required tools..."
+    # Python first: on a PC without winget it is the one tool that cannot install
+    # itself, and it is what bootstraps the rest (yt-dlp, FFmpeg, mutagen) through pip.
+    Ensure-PythonCommand
+    Ensure-Command -Command "yt-dlp" -Name "yt-dlp" -WingetId "yt-dlp.yt-dlp" -ManualUrl "https://github.com/yt-dlp/yt-dlp/releases/latest" -PipInstall {
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
+    }
+    Ensure-Command -Command "ffmpeg" -Name "FFmpeg" -WingetId "Gyan.FFmpeg" -ManualUrl "https://www.gyan.dev/ffmpeg/builds/" -ManualTip "Download a static build, extract it, and add its bin folder to PATH." -PipInstall {
+        Install-FfmpegViaPip
+    }
+    # Deno is optional: check it so its status shows during setup, but never block
+    # on it. yt-dlp uses it only for some videos; the download step installs it on
+    # demand, and a Deno-less run is the normal fallback.
+    if (Test-DenoAvailable) {
+        Write-Step "Deno found."
+    } else {
+        Write-Mascot "(._.)" "Deno is not set up yet. It is only needed for some videos and will be added automatically if a download needs it."
+    }
+
+    $script:DownloadPipelineReady = $true
+}
+
+function Ensure-AacPipeline {
+    if ($script:AacPipelineReady) {
+        return
+    }
+
+    Write-Host "Checking AAC conversion tools..."
+    Ensure-PythonCommand
+    Ensure-Command -Command "ffmpeg" -Name "FFmpeg" -WingetId "Gyan.FFmpeg" -ManualUrl "https://www.gyan.dev/ffmpeg/builds/" -ManualTip "Download a static build, extract it, and add its bin folder to PATH." -PipInstall {
+        Install-FfmpegViaPip
+    }
+
+    $script:AacPipelineReady = $true
+}
+
 function Update-DownloadTools {
     param([string]$FailureText = "")
 
@@ -867,14 +961,42 @@ function Update-DownloadTools {
     Refresh-Path
 }
 
-function Remove-StaleAacWorkFiles {
+function Repair-StaleAacWorkFiles {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    $staleFiles = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^\..*\.(tmp|backup)\.m4a$|^\..*\.cover\.tmp\.jpg$' }
+    $workFiles = Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue
 
-    foreach ($file in $staleFiles) {
-        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+    foreach ($file in $workFiles) {
+        $backupMatch = [regex]::Match($file.Name, '^\.(?<base>.+)\.[0-9a-fA-F]{32}\.backup\.m4a$')
+        if ($backupMatch.Success) {
+            $finalPath = Join-Path $file.DirectoryName ($backupMatch.Groups["base"].Value + ".m4a")
+            if (Test-Path -LiteralPath $finalPath) {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            } else {
+                Move-Item -LiteralPath $file.FullName -Destination $finalPath -Force -ErrorAction SilentlyContinue
+            }
+            continue
+        }
+
+        if ($file.Name -match '^\..*\.tmp\.m4a$|^\..*\.cover\.tmp\.jpg$') {
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-OutputRootWritable {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    try {
+        New-Item -ItemType Directory -Force -Path $Root | Out-Null
+        $probe = Join-Path $Root (".write-test." + [guid]::NewGuid().ToString("N"))
+        Set-Content -LiteralPath $probe -Value "test" -Encoding ASCII -ErrorAction Stop
+        Remove-Item -LiteralPath $probe -Force -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Mascot "(o_o?)" "This folder is not writable: $Root" -Color "yellow"
+        Write-Host "Move the BAT to Downloads, Desktop, or another normal user folder and run it again."
+        return $false
     }
 }
 
@@ -897,13 +1019,13 @@ function Reset-AacStatusLine {
 function Convert-ExistingOpusToAac {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    Remove-StaleAacWorkFiles -Root $Root
+    Repair-StaleAacWorkFiles -Root $Root
 
     $opusFiles = Get-ChildItem -LiteralPath $Root -Recurse -Filter "*.opus" -File -ErrorAction SilentlyContinue
     if (-not $opusFiles) {
         Write-Host ""
         Write-Mascot "(._.)" "No Opus files found in: $Root"
-        Remove-StaleAacWorkFiles -Root $Root
+        Repair-StaleAacWorkFiles -Root $Root
         return
     }
 
@@ -1072,10 +1194,10 @@ audio.save()
             if ($tagExitCode -ne 0) {
                 $failed++
                 if (Test-Path -LiteralPath $tempAacPath) {
-                    Remove-Item -LiteralPath $tempAacPath -Force
+                    Remove-Item -LiteralPath $tempAacPath -Force -ErrorAction SilentlyContinue
                 }
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
-                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
+                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force -ErrorAction SilentlyContinue
                 }
                 Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not tag AAC file: $($opus.Name)" -Color "red"
@@ -1085,37 +1207,48 @@ audio.save()
             }
 
             try {
-                Move-Item -LiteralPath $tempAacPath -Destination $aacPath -Force
-                Remove-Item -LiteralPath $opus.FullName -Force
-                if (Test-Path -LiteralPath $backupAacPath) {
-                    Remove-Item -LiteralPath $backupAacPath -Force
-                }
-                $converted++
-                $deleted++
+                Move-Item -LiteralPath $tempAacPath -Destination $aacPath -Force -ErrorAction Stop
             } catch {
                 $failed++
                 if (Test-Path -LiteralPath $tempAacPath) {
-                    Remove-Item -LiteralPath $tempAacPath -Force
-                }
-                if (Test-Path -LiteralPath $aacPath) {
-                    Remove-Item -LiteralPath $aacPath -Force
+                    Remove-Item -LiteralPath $tempAacPath -Force -ErrorAction SilentlyContinue
                 }
                 if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
-                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
+                    Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force -ErrorAction SilentlyContinue
                 }
                 Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
                 Write-Mascot "(>_<)" "Could not finalize AAC file: $($opus.Name)" -Color "red"
                 Write-Host "Kept original Opus file."
+                continue
+            }
+
+            $converted++
+            try {
+                Remove-Item -LiteralPath $opus.FullName -Force -ErrorAction Stop
+                $deleted++
+            } catch {
+                Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
+                Write-Mascot "(u_u)" "AAC was created, but the original Opus could not be removed: $($opus.Name)" -Color "yellow"
+                Write-Host "Keeping both files."
+            }
+
+            if (Test-Path -LiteralPath $backupAacPath) {
+                try {
+                    Remove-Item -LiteralPath $backupAacPath -Force -ErrorAction Stop
+                } catch {
+                    Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
+                    Write-Mascot "(u_u)" "AAC backup cleanup failed; leaving backup file for safety." -Color "yellow"
+                }
             }
             continue
         }
 
         $failed++
         if (Test-Path -LiteralPath $tempAacPath) {
-            Remove-Item -LiteralPath $tempAacPath -Force
+            Remove-Item -LiteralPath $tempAacPath -Force -ErrorAction SilentlyContinue
         }
         if ($hadExistingAac -and (Test-Path -LiteralPath $backupAacPath)) {
-            Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force
+            Move-Item -LiteralPath $backupAacPath -Destination $aacPath -Force -ErrorAction SilentlyContinue
         }
         Reset-AacStatusLine -IsLive ([ref]$aacStatusLive)
         Write-Mascot "(>_<)" "Could not convert: $($opus.Name)" -Color "red"
@@ -1137,7 +1270,7 @@ audio.save()
     if (Test-Path -LiteralPath $M4aTagScript) {
         Remove-Item -LiteralPath $M4aTagScript -Force -ErrorAction SilentlyContinue
     }
-    Remove-StaleAacWorkFiles -Root $Root
+    Repair-StaleAacWorkFiles -Root $Root
 }
 
 function Write-YtDlpFailureIfNonRetryable {
@@ -1806,7 +1939,16 @@ function Get-DescriptionTimestampChapters {
             $hours = [int]$Matches.hours
         }
 
-        $startTime = ($hours * 3600) + ([int]$Matches.minutes * 60) + [int]$Matches.seconds
+        $minutes = [int]$Matches.minutes
+        $seconds = [int]$Matches.seconds
+        if ($seconds -ge 60) {
+            continue
+        }
+        if ($Matches.hours -and $minutes -ge 60) {
+            continue
+        }
+
+        $startTime = ($hours * 3600) + ($minutes * 60) + $seconds
         $title = $title.Trim().Trim("-").Trim()
         if ([string]::IsNullOrWhiteSpace($title)) {
             continue
@@ -2396,28 +2538,14 @@ Write-Host ""
 Write-Host "YouTube Album Splitter"
 Write-Host ""
 
-Write-Host "Checking required tools..."
-# Python first: on a PC without winget it is the one tool that cannot install
-# itself, and it is what bootstraps the rest (yt-dlp, FFmpeg, mutagen) through pip.
-Ensure-PythonCommand
-Ensure-Command -Command "yt-dlp" -Name "yt-dlp" -WingetId "yt-dlp.yt-dlp" -ManualUrl "https://github.com/yt-dlp/yt-dlp/releases/latest" -PipInstall {
-    Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
-}
-Ensure-Command -Command "ffmpeg" -Name "FFmpeg" -WingetId "Gyan.FFmpeg" -ManualUrl "https://www.gyan.dev/ffmpeg/builds/" -ManualTip "Download a static build, extract it, and add its bin folder to PATH." -PipInstall {
-    Install-FfmpegViaPip
-}
-# Deno is optional: check it so its status shows during setup, but never block
-# on it. yt-dlp uses it only for some videos; the download step installs it on
-# demand, and a Deno-less run is the normal fallback.
-if (Test-DenoAvailable) {
-    Write-Step "Deno found."
-} else {
-    Write-Mascot "(._.)" "Deno is not set up yet. It is only needed for some videos and will be added automatically if a download needs it."
-}
+$script:DownloadPipelineReady = $false
+$script:AacPipelineReady = $false
 
 $ScriptDir = Split-Path -Parent $env:BAT_PATH
 $DownloadsRoot = Join-Path $ScriptDir "YouTube Album Splitter Songs"
-New-Item -ItemType Directory -Force -Path $DownloadsRoot | Out-Null
+if (-not (Test-OutputRootWritable -Root $DownloadsRoot)) {
+    exit 1
+}
 
 # Session album counter: counts albums successfully downloaded this run. When it
 # crosses a milestone (10, then 100) a celebration plays once, just before the
@@ -2448,25 +2576,23 @@ while ($true) {
     }
 
     if ($Url.Trim() -ieq "aac") {
+        Ensure-AacPipeline
         Convert-ExistingOpusToAac -Root $DownloadsRoot
         Write-Host ""
         Write-Host "Paste another link, type $(Get-Cmd 'aac') again, or press Enter with no link to close."
         continue
     }
 
-    if ($Url -notmatch '^https?://((www|m|music)\.)?(youtube\.com|youtu\.be)/') {
+    $ResolvedUrl = Resolve-YouTubeVideoUrl -Url $Url
+    if (-not $ResolvedUrl.Valid) {
         Write-Host ""
-        Write-Mascot "(o_o?)" "That does not look like a YouTube link." -Color "yellow"
-        Write-Host "Copy the full YouTube video link and try again."
+        Write-Mascot "(o_o?)" $ResolvedUrl.Message -Color "yellow"
+        Write-Host $ResolvedUrl.Tip
         continue
     }
+    $Url = $ResolvedUrl.NormalizedUrl
 
-    if (Test-YouTubeVideoIdLooksIncomplete -Url $Url) {
-        Write-Host ""
-        Write-Mascot "(o_o?)" "That YouTube video ID looks incomplete." -Color "yellow"
-        Write-Host "Copy the full YouTube video link and try again."
-        continue
-    }
+    Ensure-DownloadPipeline
 
     try {
         $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
@@ -2578,23 +2704,29 @@ while ($true) {
         Invoke-KnownTrackSplit -Tracks $TrackList -OutDir $OutDir -FullOpusPath $FullOpus.FullName -SourceName $TrackSource | Out-Null
     }
 
-    Write-Host ""
-    Write-Host "Preparing tag fixer..."
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        Invoke-Python -Arguments @("-c", "import mutagen") 2>$null
-        $mutagenCheckExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+    $SongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
+        Where-Object { $_.Name -match '^\d+\. ' } |
+        Measure-Object).Count
+    $tagExitCode = $null
 
-    if ($mutagenCheckExitCode -ne 0) {
-        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "mutagen")
-    }
+    if ($SongCount -gt 0) {
+        Write-Host ""
+        Write-Host "Preparing tag fixer..."
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            Invoke-Python -Arguments @("-c", "import mutagen") 2>$null
+            $mutagenCheckExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
 
-    $TagScript = Join-Path $env:TEMP ("fix_opus_chapter_tags." + [guid]::NewGuid().ToString("N") + ".py")
-    @'
+        if ($mutagenCheckExitCode -ne 0) {
+            Invoke-Python -Arguments @("-m", "pip", "install", "--user", "mutagen")
+        }
+
+        $TagScript = Join-Path $env:TEMP ("fix_opus_chapter_tags." + [guid]::NewGuid().ToString("N") + ".py")
+        @'
 from __future__ import annotations
 
 import base64
@@ -2653,35 +2785,32 @@ for path in sorted(chapter_dir.glob("*.opus")):
     print(f"Fixed: {clean_name}")
 '@ | Set-Content -LiteralPath $TagScript -Encoding UTF8
 
-    Write-Host ""
-    Write-Host "Fixing album art and tags..."
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $tagOutput = Invoke-Python -Arguments @($TagScript, $OutDir, $Cover, $AlbumTitle, $AlbumArtist) 2>&1
-        $tagExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
+        Write-Host ""
+        Write-Host "Fixing album art and tags..."
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $tagOutput = Invoke-Python -Arguments @($TagScript, $OutDir, $Cover, $AlbumTitle, $AlbumArtist) 2>&1
+            $tagExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
 
-    if ($tagExitCode -eq 0) {
-        $tagOutput | ForEach-Object { Write-Host $_ }
-    } else {
-        Write-Mascot "(;_;)" "Tag fixer failed. Keeping the full-length Opus file if it still exists." -Color "red"
-        $tagOutput | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
-    }
+        if ($tagExitCode -eq 0) {
+            $tagOutput | ForEach-Object { Write-Host $_ }
+        } else {
+            Write-Mascot "(;_;)" "Tag fixer failed. Keeping the full-length Opus file if it still exists." -Color "red"
+            $tagOutput | Select-Object -Last 8 | ForEach-Object { Write-Host $_ }
+        }
 
-    if (Test-Path -LiteralPath $TagScript) {
-        Remove-Item -LiteralPath $TagScript -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $TagScript) {
+            Remove-Item -LiteralPath $TagScript -Force -ErrorAction SilentlyContinue
+        }
     }
 
     if (Test-Path -LiteralPath $Cover) {
         Remove-Item -LiteralPath $Cover -Force
     }
-
-    $SongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-        Where-Object { $_.Name -match '^\d+\. ' } |
-        Measure-Object).Count
 
     if ($FullOpus) {
         if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
