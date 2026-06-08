@@ -49,7 +49,7 @@ It is designed for album-style YouTube uploads that have track timestamps. It us
 - [Important](#important)
 - [Design Choices](#design-choices)
 - [Private CI Validation Harness](#private-ci-validation-harness)
-- [Security, Privacy, and System Changes](#security-privacy-and-system-changes)
+- [Security And Privacy](#security-and-privacy)
 - [License](#license)
 
 </details>
@@ -125,7 +125,7 @@ After you paste a valid YouTube video link, the script checks for yt-dlp, FFmpeg
 
 Deno is installed only on demand, if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
 
-The exact package IDs, network destinations, file locations, and uninstall commands are listed later in [Security, Privacy, and System Changes](#security-privacy-and-system-changes), so this section stays focused on what the first run does.
+The exact package IDs, network destinations, file locations, and uninstall commands are listed in [SECURITY.md](SECURITY.md), so this section stays focused on what the first run does.
 
 ## Why It Is One File
 
@@ -222,10 +222,10 @@ The folder stays clean after a successful split:
 
 ```text
 YouTube Album Splitter Songs
-└─ Artist - Album
-   ├─ 1. Song Name.opus
-   ├─ 2. Song Name.opus
-   └─ 3. Song Name.opus
++-- Artist - Album
+    |-- 1. Song Name.opus
+    |-- 2. Song Name.opus
+    +-- 3. Song Name.opus
 ```
 
 Artist and album naming is based on the YouTube title. It works best when titles look like:
@@ -319,129 +319,15 @@ Before public tagging, releases are checked with a private CI validation harness
 
 The harness exists so the public release can stay simple: one downloadable Windows script, with the fragile setup, parsing, tagging, conversion, cleanup, and failure paths tested before release.
 
-## Security, Privacy, and System Changes
+## Security And Privacy
 
 This project is open source, and the release download is the same plain-text `.bat` script from this repo. The release exists to make downloading easier for beginners.
 
-Because the script can install helper tools automatically, here is exactly what it may change.
+The tool runs locally on your machine. It downloads audio from the YouTube link you provide, writes finished files next to the `.bat`, and does not upload your files anywhere.
 
-### Packages It May Install
+Because the script can install helper tools automatically, the detailed security policy lists the packages it may install, network services it may contact, files it writes, PATH behavior, inspection steps, uninstall commands, and vulnerability reporting instructions:
 
-Installed through `winget` when it is available and a tool is missing:
-
-```text
-yt-dlp.yt-dlp
-Gyan.FFmpeg
-Python.Python.3.12
-DenoLand.Deno
-```
-
-Installed through `pip`:
-
-```text
-mutagen
-yt-dlp[default]
-curl-cffi
-ffmpeg-downloader
-```
-
-`mutagen` is used for metadata handling.
-
-`yt-dlp[default]` and `curl-cffi` are used on the retry/repair path when the active `yt-dlp` appears to be a Python-installed version.
-
-`ffmpeg-downloader` is used only when `winget` is unavailable and the script needs a Python-based FFmpeg setup path.
-
-Deno is installed only on demand, either through `winget` or its official installer, the first time a download fails and the retry needs YouTube's JavaScript challenge solver.
-
-### Network Access
-
-The script may contact:
-
-* YouTube / YouTube Music, through `yt-dlp`, to read video data and download audio.
-* GitHub, when `yt-dlp` downloads its external JavaScript challenge-solving component.
-* Microsoft `winget` package sources, when installing or upgrading dependencies.
-* Python package indexes, when installing `mutagen`, repairing a Python-installed `yt-dlp`, or setting up yt-dlp and FFmpeg without `winget`.
-* `deno.land`, only when Deno is set up on demand without `winget`.
-
-The script does not upload your files anywhere. It downloads audio from the link you provide and writes the finished files locally.
-
-### Where Files Are Written
-
-Finished songs are written next to the `.bat` file:
-
-```text
-<folder containing the .bat>\YouTube Album Splitter Songs
-```
-
-Each album/upload gets its own subfolder:
-
-```text
-<folder containing the .bat>\YouTube Album Splitter Songs\<album folder>
-```
-
-Temporary tag helpers:
-
-```text
-%TEMP%\fix_opus_chapter_tags.<random>.py
-%TEMP%\fix_m4a_tags.<random>.py
-```
-
-During processing, a temporary `cover.jpg` may be created inside the album folder. It is removed after album art is embedded.
-
-### PATH Behavior
-
-The script refreshes `PATH` only inside its own running PowerShell window so newly installed tools can be found immediately. It may also add the standard Windows app execution alias folder to that in-window `PATH` so it can reliably find `winget`.
-
-It does not directly edit your permanent system or user `PATH`. Tools installed through `winget` may add themselves to PATH through their normal installers. The Python FFmpeg fallback uses `ffmpeg-downloader --add-path`, which may ask that helper to add FFmpeg to user PATH.
-
-### How To Inspect Before Running
-
-The `.bat` file is plain text.
-
-To inspect it before running:
-
-1. Right-click `YouTube Album Splitter.bat`.
-2. Click **Show more options** if needed.
-3. Click **Edit**, or open it with Notepad / VS Code.
-
-The first few lines launch PowerShell. The main script is embedded later in the same file after the `POWERSHELL_PAYLOAD` marker.
-
-### How To Uninstall Helper Tools
-
-Only uninstall these if you installed them for this tool and do not use them for anything else.
-
-```powershell
-winget uninstall --id yt-dlp.yt-dlp
-winget uninstall --id Gyan.FFmpeg
-winget uninstall --id Python.Python.3.12
-winget uninstall --id DenoLand.Deno
-```
-
-Python packages:
-
-Use whichever Python command works on your system. For example:
-
-```powershell
-python -m pip uninstall mutagen
-python -m pip uninstall yt-dlp curl-cffi
-python -m pip uninstall ffmpeg-downloader
-```
-
-Or, if your system uses the Python launcher:
-
-```powershell
-py -3 -m pip uninstall mutagen
-py -3 -m pip uninstall yt-dlp curl-cffi
-py -3 -m pip uninstall ffmpeg-downloader
-```
-
-If Deno was set up without `winget`, it lives in `%USERPROFILE%\.deno`; remove that folder to uninstall it.
-
-If FFmpeg was set up with `ffmpeg-downloader`, run this before uninstalling the package to delete its downloaded binaries:
-
-```powershell
-ffdl remove --all
-```
+[Security policy and system changes](SECURITY.md)
 
 ## License
 
