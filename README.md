@@ -298,7 +298,7 @@ This tool is for one selected YouTube video at a time. It does not process whole
 
 Use this only for content you own, created, or have permission to download and process.
 
-Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is expected for small unsigned projects. If you trust the file, click **More info** then **Run anyway**.
+Windows may show an **Open File - Security Warning** or **Unknown Publisher** prompt because this is an internet-downloaded, unsigned `.bat` file. That is a normal Windows provenance warning, not the same thing as an antivirus malware detection. A stronger SmartScreen block or antivirus quarantine is separate; only run the file if you trust this repo and the downloaded BAT.
 
 ## Design Choices
 

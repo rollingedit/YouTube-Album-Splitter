@@ -26,9 +26,13 @@ This project is open source, and the release download is the same plain-text `.b
 
 Because the script can install helper tools automatically, this file lists what it may change.
 
-## Unsigned Script Warning
+## Unsigned Script And Unknown Publisher Warnings
 
-Windows may show a SmartScreen or antivirus warning because this is an unsigned helper script that installs/uses download tools. That warning is expected for small unsigned projects. If you trust the file, click **More info** then **Run anyway**.
+Windows may show an **Open File - Security Warning** or **Unknown Publisher** prompt because the release is an internet-downloaded, unsigned `.bat` file.
+
+That warning means Windows cannot verify a digital publisher signature for the downloaded file. It is not the same thing as an antivirus malware detection, a Defender quarantine, or the full SmartScreen message that says Windows protected your PC.
+
+A stronger SmartScreen block or antivirus quarantine is separate. Only run the file if you trust this repo and the downloaded BAT.
 
 ## Packages It May Install
 
