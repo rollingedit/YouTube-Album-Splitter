@@ -761,7 +761,7 @@ function Ensure-PythonCommand {
 }
 
 function Invoke-Python {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments)
 
     if (-not $script:PythonCommand) {
         $script:PythonCommand = Resolve-PythonCommand
