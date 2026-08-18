@@ -924,6 +924,60 @@ function Ensure-AacPipeline {
     $script:AacPipelineReady = $true
 }
 
+function Update-PipInstalledYtDlp {
+    # Update a pip-installed yt-dlp using the interpreter that OWNS the exe this
+    # window actually runs. 'py -3' can resolve to a different Python than the one
+    # whose Scripts folder is first in PATH; a --user update through that other
+    # interpreter lands later in PATH and is shadowed by the stale exe forever,
+    # so every retry re-ran the old yt-dlp. Returns $true if a pip update ran.
+    param([switch]$Nightly)
+
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if (-not $ytDlpCommand -or -not $ytDlpCommand.Source) {
+        return $false
+    }
+    if ($ytDlpCommand.Source -notmatch '(?i)\\Scripts\\yt-dlp(?:\.exe)?$') {
+        return $false
+    }
+
+    $installHome = Split-Path -Parent (Split-Path -Parent $ytDlpCommand.Source)
+    $channelNote = if ($Nightly) { " (nightly pre-release)" } else { "" }
+    $pipTail = @()
+    if ($Nightly) {
+        $pipTail += "--pre"
+    }
+    $pipTail += @("yt-dlp[default]", "curl-cffi")
+
+    try {
+        # Per-interpreter install, e.g. C:\...\Python311\Scripts: python.exe sits
+        # one folder up from Scripts. Update in place, no --user.
+        $ownerPython = Join-Path $installHome "python.exe"
+        if (Test-Path -LiteralPath $ownerPython) {
+            Write-Host "Detected pip-installed yt-dlp. Updating it$channelNote with its own Python..."
+            & $ownerPython -m pip install --upgrade @pipTail | Out-Host
+            return $true
+        }
+
+        # pip --user install, e.g. %APPDATA%\Python\Python312\Scripts: no
+        # python.exe nearby, but the folder name carries the interpreter version.
+        if ($installHome -match '(?i)\\Python\\Python(?<major>\d)(?<minor>\d+)$' -and (Get-Command py -ErrorAction SilentlyContinue)) {
+            $pyVersionArg = "-$($Matches.major).$($Matches.minor)"
+            Write-Host "Detected pip-installed yt-dlp (user install). Updating it$channelNote with Python $($Matches.major).$($Matches.minor)..."
+            & py $pyVersionArg -m pip install --user --upgrade @pipTail | Out-Host
+            if ($LASTEXITCODE -eq 0) {
+                return $true
+            }
+        }
+
+        # Unrecognized layout: fall back to whatever Python this window found.
+        Write-Host "Detected pip-installed yt-dlp. Updating it$channelNote..."
+        Invoke-Python -Arguments (@("-m", "pip", "install", "--user", "--upgrade") + $pipTail) | Out-Host
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Update-DownloadTools {
     param([string]$FailureText = "")
 
@@ -943,21 +997,43 @@ function Update-DownloadTools {
         Install-Deno | Out-Null
     }
 
+    # Out-Host keeps winget/pip text visible but out of this function's output
+    # stream. Callers consume that stream as their return value, and a stray line
+    # here turned a failed download into a reported success.
     if (Resolve-WingetPath) {
-        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
-        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements")
+        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+        Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+        Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
     }
 
-    # Self-update a Python-installed yt-dlp (the no-winget setup path uses this).
+    [void](Update-PipInstalledYtDlp)
+
+    Refresh-Path
+}
+
+function Update-DownloadToolsNightly {
+    # Last resort after the stable update still fails: YouTube sometimes breaks
+    # every stable yt-dlp release at once and for days only the nightly build
+    # carries the fix (e.g. the Aug 2026 "HTTP Error 403: Forbidden" breakage).
+    Write-Host "The newest stable yt-dlp still fails. Trying yt-dlp's nightly build, which gets YouTube fixes first..."
+
+    if (Update-PipInstalledYtDlp -Nightly) {
+        Refresh-Path
+        return
+    }
+
+    # Standalone exe (winget or manual download): the official binary can switch
+    # itself to the nightly channel. Harmless if this build cannot self-update.
     $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
-    if ($ytDlpCommand -and $ytDlpCommand.Source -match '\\Python\d*\\Scripts\\|\\Python\\PythonCore\\|\\Scripts\\yt-dlp') {
-        Write-Host "Detected Python-installed yt-dlp. Updating Python yt-dlp with default extras..."
+    if ($ytDlpCommand) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         try {
-            Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
-        } catch {}
+            & $ytDlpCommand.Source --update-to nightly 2>&1 | Out-Host
+        } catch {} finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
     }
-
     Refresh-Path
 }
 
@@ -1300,6 +1376,36 @@ function Write-YtDlpFailureIfNonRetryable {
     }
 
     return $false
+}
+
+function Write-YtDlpFinalFailure {
+    # All attempts (stable update, then nightly) failed. Show the real yt-dlp
+    # error before the generic hints: "HTTP Error 403" vs "no formats found" vs
+    # a network timeout point to very different fixes, and hiding the error made
+    # remote troubleshooting from a user's screenshot impossible.
+    param([object[]]$Output)
+
+    Write-Host ""
+    Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
+
+    $errorLines = @(@($Output) | Where-Object { $_ -match '(?i)^\s*ERROR' } | Select-Object -Last 4)
+    if (-not $errorLines) {
+        $errorLines = @(@($Output) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 4)
+    }
+    if ($errorLines) {
+        Write-Host "yt-dlp reported:"
+        $errorLines | ForEach-Object { Write-Host ("  " + $_) }
+    }
+
+    Write-Host ""
+    Write-Host "Common causes:"
+    Write-Host "- The link is private, age-restricted, deleted, or region-locked."
+    Write-Host "- The link is a playlist/channel instead of one video."
+    Write-Host "- The internet connection is blocked or unstable."
+    Write-Host "- YouTube changed something and yt-dlp needs another update later."
+    Write-Host ""
+    Write-Host "Double-check the link and try again."
+    Write-Host ""
 }
 
 function ConvertTo-ProcessArgument {
@@ -1788,34 +1894,59 @@ function Invoke-YtDlpWithRecovery {
     if ($EchoOutput) {
         $retryOutput | ForEach-Object { Write-Host $_ }
     }
-    if ($retryResult.ExitCode -ne 0) {
-        $retryText = $retryOutput -join "`n"
-        if (Write-YtDlpFailureIfNonRetryable -Text $retryText) {
-            return [pscustomobject]@{
-                Succeeded = $false
-                Output = $retryOutput
-            }
+    if ($retryResult.ExitCode -eq 0) {
+        return [pscustomobject]@{
+            Succeeded = $true
+            Output = $retryOutput
         }
+    }
 
-        Write-Host ""
-        Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
-        Write-Host "Common causes:"
-        Write-Host "- The link is private, age-restricted, deleted, or region-locked."
-        Write-Host "- The link is a playlist/channel instead of one video."
-        Write-Host "- The internet connection is blocked or unstable."
-        Write-Host "- YouTube changed something and yt-dlp needs another update later."
-        Write-Host ""
-        Write-Host "Double-check the link and try again."
-        Write-Host ""
+    $retryText = $retryOutput -join "`n"
+    if (Write-YtDlpFailureIfNonRetryable -Text $retryText) {
         return [pscustomobject]@{
             Succeeded = $false
             Output = $retryOutput
         }
     }
 
+    Write-Host ""
+    Update-DownloadToolsNightly
+
+    $nightlyArgs = @()
+    $nightlyArgs += Get-RemoteComponentArgs
+    $nightlyArgs += $YtDlpArgs
+
+    $nightlyResult = Invoke-WithMascotStatus -Message $RetryMessage -ProgressText $ProgressText -ScriptBlock {
+        param([object[]]$ArgsForYtDlp)
+        $output = & yt-dlp @ArgsForYtDlp 2>&1
+        [pscustomobject]@{
+            Output = @($output)
+            ExitCode = $LASTEXITCODE
+        }
+    } -ArgumentList (,$nightlyArgs)
+    $nightlyOutput = @($nightlyResult.Output)
+    if ($EchoOutput) {
+        $nightlyOutput | ForEach-Object { Write-Host $_ }
+    }
+    if ($nightlyResult.ExitCode -ne 0) {
+        $nightlyText = $nightlyOutput -join "`n"
+        if (Write-YtDlpFailureIfNonRetryable -Text $nightlyText) {
+            return [pscustomobject]@{
+                Succeeded = $false
+                Output = $nightlyOutput
+            }
+        }
+
+        Write-YtDlpFinalFailure -Output $nightlyOutput
+        return [pscustomobject]@{
+            Succeeded = $false
+            Output = $nightlyOutput
+        }
+    }
+
     return [pscustomobject]@{
         Succeeded = $true
-        Output = $retryOutput
+        Output = $nightlyOutput
     }
 }
 
@@ -1897,15 +2028,23 @@ function Invoke-YtDlpDownloadFullAudio {
     }
 
     Write-Host ""
-    Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
-    Write-Host "Common causes:"
-    Write-Host "- The link is private, age-restricted, deleted, or region-locked."
-    Write-Host "- The link is a playlist/channel instead of one video."
-    Write-Host "- The internet connection is blocked or unstable."
-    Write-Host "- YouTube changed something and yt-dlp needs another update later."
-    Write-Host ""
-    Write-Host "Double-check the link and try again."
-    Write-Host ""
+    Update-DownloadToolsNightly
+
+    $nightlyArgs = @()
+    $nightlyArgs += Get-RemoteComponentArgs
+    $nightlyArgs += $baseArgs
+
+    $nightlyResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $nightlyArgs -Message "Trying once more with nightly yt-dlp" -TrackCount $TrackCount
+    if ($nightlyResult.ExitCode -eq 0) {
+        return $true
+    }
+
+    $nightlyText = (@($nightlyResult.Output) -join "`n")
+    if (Write-YtDlpFailureIfNonRetryable -Text $nightlyText) {
+        return $false
+    }
+
+    Write-YtDlpFinalFailure -Output $nightlyResult.Output
     return $false
 }
 
