@@ -121,9 +121,9 @@ For description fallback, the tool requires at least two timestamps, the first t
 
 ## Automatic Setup
 
-After you paste a valid YouTube video link, the script checks for yt-dlp, FFmpeg, Python, and the Python tagging library it needs. If you type `aac`, it checks only the tools needed for AAC conversion. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
+After you paste a valid YouTube video link, the script checks for yt-dlp, FFmpeg, Python, Deno, and the Python tagging library it needs. If you type `aac`, it checks only the tools needed for AAC conversion. It installs missing tools automatically when possible, then refreshes PATH inside the current terminal session so the run can continue.
 
-Deno is installed only on demand, if a download fails and yt-dlp needs its JavaScript challenge solver to retry. It is skipped on normal runs.
+Deno is set up during that same check. Current yt-dlp needs a supported JavaScript runtime (Deno 2.3.0 or newer) for full YouTube support, so the tool installs it like the other helper tools and updates it if an older Deno is found. If Deno setup fails, the run continues with a warning, because some videos can still download without it.
 
 The exact package IDs, network destinations, file locations, and uninstall commands are listed in [SECURITY.md](SECURITY.md), so this section stays focused on what the first run does.
 
@@ -156,7 +156,7 @@ What each part does:
 * **FFmpeg**: Media backend for audio extraction, controlled track splitting, square cover cropping, and stream processing.
 * **Python**: Runs only after Python exists. It is used for final metadata cleanup when split tracks or AAC conversion need tagging.
 * **mutagen**: Python metadata library used to edit Opus/Ogg and M4A tags and embed cover art correctly.
-* **Deno**: JavaScript runtime used by yt-dlp for modern YouTube extraction support when needed.
+* **Deno**: JavaScript runtime yt-dlp requires for full YouTube support. Version 2.3.0 or newer.
 * **winget**: Windows package installer used to install missing helper tools automatically.
 
 yt-dlp handles the initial metadata read, thumbnail handling, and full-audio download. The download is shown as a percentage progress bar. After that, the tool splits known tracks with FFmpeg so the terminal can show real `current/total` progress instead of pretending the split is one opaque operation.
@@ -171,27 +171,25 @@ The same internal pieces handle the optional AAC path. If you type `aac` at the 
 
 YouTube changes often, so the script includes a recovery path.
 
-If the first download attempt fails, it automatically updates the main download tools and retries once:
+A failed download gets up to three attempts:
 
-* yt-dlp
-* FFmpeg
-* Deno
+1. The normal attempt.
+2. A retry after updating the download tools (yt-dlp, FFmpeg, Deno).
+3. A final retry after switching yt-dlp to its nightly build, which usually receives YouTube fixes before the stable release does.
 
-If the active `yt-dlp` appears to be a Python-installed version, it also repairs that setup with the correct optional extras.
+The update step repairs the yt-dlp installation that is actually in use. A pip-installed yt-dlp is updated through the Python that owns it, a winget-managed copy is updated through winget, and a manually downloaded exe updates itself. The tool never updates one copy and then runs a different one, and when it cannot prove which installation owns the active yt-dlp, it skips the update instead of guessing.
 
-If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same update/retry path.
+After each repair, the tool checks whether the active yt-dlp actually changed and reports that honestly. A retry after an unchanged repair still happens, because YouTube failures are often temporary, but it is labeled as such instead of being presented as a fix.
 
-This update step exists because outdated download tools are one of the most common reasons YouTube downloads suddenly stop working. The tool skips that path when the pasted text is not one selected YouTube video, because there is nothing to repair. It also skips pointless updates when YouTube asks this machine for sign-in or extra verification.
+If yt-dlp is too old to understand one of the required options, the tool treats that as an outdated-tool problem and runs the same repair path.
 
-Private videos, age restrictions, region locks, bot checks, sign-in requirements, and internet failures are handled as readable failures instead of silent exits.
+Download success is verified against the finished audio file, not just the downloader's exit code. If yt-dlp reports success but no audio file was produced, the run is treated as a failed download.
 
-If the retry still fails, the tool shows a plain-language message with common causes, such as:
+Only clearly final answers from YouTube stop the recovery path early: private videos and removed videos. Sign-in requests, bot checks, and generic unavailable errors go through the repair attempts first, because YouTube breakages have produced those exact messages before and were fixed by a tool update. If recovery still fails on a sign-in style error, the tool then suggests trying later or from a different network or browser session.
 
-* Private, deleted, age-restricted, or region-locked video.
-* YouTube asking this machine for sign-in or extra verification.
-* Playlist or channel link without a specific video selected.
-* Blocked or unstable internet connection.
-* A new YouTube change that needs a future yt-dlp update.
+The tool passes `--ignore-config` on every yt-dlp call it makes, so a proxy, cookie file, or download filter configured for other yt-dlp use on the same machine cannot silently change how the app behaves.
+
+If every attempt fails, the tool shows the actual yt-dlp error plus a short environment summary: app version, the exact yt-dlp version and location, and the Python, Deno, and FFmpeg versions. A screenshot of that failure screen is usually enough to diagnose the problem in a bug report.
 
 ## Safety
 
@@ -288,7 +286,9 @@ Windows is required.
 
 On Windows 10 and Windows 11 systems, the script can set up its helper tools automatically with winget.
 
-If winget is unavailable, the script can still set up most helper tools through Python. If Python is also missing, it prints manual Python install instructions and continues automated setup on the next run.
+Python 3.11 or newer is required. If an older Python is found, the tool installs a current Python alongside it automatically when winget is available; the older Python is left untouched. Python 3.10 reaches end of life in October 2026 and yt-dlp is dropping support for it, which would leave 3.10 machines stuck on a yt-dlp that no update could fix.
+
+If winget is unavailable, the script can still set up most helper tools through Python. If Python is also missing or too old, it prints manual Python install instructions and continues automated setup on the next run.
 
 ## Important
 
@@ -310,6 +310,7 @@ This project intentionally prioritizes a one-file, double-click Windows workflow
 * **Automatic helper setup**: after a valid video link or `aac` command, the run may install required tools through `winget` and `pip` so users do not have to set them up manually.
 * **Opus first**: Opus is usually the best match for YouTube audio. AAC conversion is optional and lossy, intended for apps or devices that need `.m4a`.
 * **No browser-cookie flow by default**: browser cookies are sensitive and exporting them is friction-heavy for normal users. Videos that require sign-in, cookies, or bot verification may fail; the lowest-friction path is to try again later, try another network/browser session, or use a video that does not require verification.
+* **Own yt-dlp settings**: the app ignores personal yt-dlp configuration files on every call it makes, so the pipeline behaves the same on every machine. A global yt-dlp config still applies to your own yt-dlp use outside this app.
 
 The release script is deliberately defensive: a recursive, polyglot bootstrapper and media pipeline packed into one inspectable Windows entrypoint. It resolves and repairs its own dependencies, isolates the selected video, validates timestamp sources, retries recoverable failures, preserves originals during conversion, and surfaces edge cases as readable failure modes rather than crashing out. That kind of logic normally gets spread across several separate scripts, but it is kept here in one file.
 
