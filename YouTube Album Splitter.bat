@@ -1147,6 +1147,10 @@ from mutagen.flac import Picture
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
+# Keep stdout UTF-8-safe when PowerShell captures this script's output; the
+# legacy ANSI codepage default cannot encode many Unicode song titles.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 opus_path = Path(sys.argv[1])
 m4a_path = Path(sys.argv[2])
 
@@ -2875,6 +2879,11 @@ from pathlib import Path
 
 from mutagen.flac import Picture
 from mutagen.oggopus import OggOpus
+
+# stdout is a pipe while PowerShell captures this script's output, so Python
+# defaults it to the legacy ANSI codepage, which cannot print many Unicode song
+# titles (Japanese, stars, emoji). Force UTF-8 and never crash on one character.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 chapter_dir = Path(sys.argv[1])
 cover_path = Path(sys.argv[2])
