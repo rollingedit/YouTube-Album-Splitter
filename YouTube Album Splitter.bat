@@ -13,6 +13,7 @@ exit /b %ERR%
 
 # POWERSHELL_PAYLOAD
 $ErrorActionPreference = "Stop"
+$script:AppVersion = "1.3.0"
 
 function Get-TableFlipText {
     return '(' + [char]0x256F + [char]0x00B0 + [char]0x25A1 + [char]0x00B0 + ')' + [char]0x256F + [char]0xFE35 + ' ' + [char]0x253B + [char]0x2501 + [char]0x253B
@@ -464,16 +465,27 @@ function Refresh-Path {
         $script:ExtraPathDirs = New-Object System.Collections.Generic.List[string]
     }
 
+    # Snapshot the PATH this process was launched with, once. Rebuilding PATH
+    # purely from the registry silently dropped process-local additions (for
+    # example a terminal session's custom tool folder), which could even switch
+    # which yt-dlp this window resolves. Keep the original PATH as the base and
+    # merge newly persisted machine/user entries into it instead.
+    if ($null -eq $script:OriginalProcessPath) {
+        $script:OriginalProcessPath = $env:Path
+    }
     $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:Path = "$machinePath;$userPath"
+    $env:Path = $script:OriginalProcessPath
 
-    # Make sure tool folders that may be missing from the saved PATH are still
-    # reachable in this window: the App Execution Alias folder (winget alias),
-    # the default Deno install folder, and any folder a setup step added (for
-    # example a pip-installed FFmpeg). Re-applied on every refresh so a later
-    # refresh does not wipe them out.
+    # Merge, in order: freshly persisted machine/user entries (so a just-finished
+    # install is visible), the App Execution Alias folder (winget alias), the
+    # default Deno install folder, and any folder a setup step added (for example
+    # a pip-installed FFmpeg). Re-applied on every refresh so a later refresh
+    # does not wipe them out.
     $extraDirs = New-Object System.Collections.Generic.List[string]
+    foreach ($dir in ("$machinePath;$userPath" -split ';')) {
+        [void]$extraDirs.Add($dir)
+    }
     [void]$extraDirs.Add((Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"))
     [void]$extraDirs.Add((Join-Path $env:USERPROFILE ".deno\bin"))
     foreach ($dir in $script:ExtraPathDirs) {
@@ -661,7 +673,7 @@ function Ensure-Command {
 }
 
 function Resolve-PythonCommand {
-    param([int]$MinimumMinor = 10)
+    param([int]$MinimumMinor = 11)
 
     Refresh-Path
 
@@ -709,13 +721,16 @@ function Ensure-PythonCommand {
         return
     }
 
-    # Tell apart "no Python" from "Python present but older than 3.10" so the
+    # Tell apart "no Python" from "Python present but older than 3.11" so the
     # messaging is honest and an outdated Python gets updated, not just reported.
+    # 3.10 counts as outdated now: it reaches end of life in October 2026 and
+    # yt-dlp is dropping it, which would strand its users on a frozen yt-dlp
+    # that no update pass could ever fix.
     $outdatedPython = [bool](Resolve-PythonCommand -MinimumMinor 0)
 
     if (Resolve-WingetPath) {
         if ($outdatedPython) {
-            Write-Host "Python is installed but too old (3.10 or newer is needed). Updating it now..."
+            Write-Host "Python is installed but too old (3.11 or newer is needed; 3.10 reaches end of life in October 2026). Updating it now..."
         } else {
             Write-Host "Python not found. Installing it now..."
         }
@@ -750,14 +765,14 @@ function Ensure-PythonCommand {
     # FFmpeg, mutagen, Deno) is set up automatically.
     if ($outdatedPython) {
         Write-Host ""
-        Write-Mascot "(o_o?)" "Your Python is older than 3.10, which the download tools need." -Color "yellow"
+        Write-Mascot "(o_o?)" "Your Python is older than 3.11, which the download tools need." -Color "yellow"
     }
-    Show-ManualSetupHelp -Name "Python 3.10 or newer" -Url "https://www.python.org/downloads/" -ExtraTip "During setup, tick 'Add python.exe to PATH'."
+    Show-ManualSetupHelp -Name "Python 3.11 or newer" -Url "https://www.python.org/downloads/" -ExtraTip "During setup, tick 'Add python.exe to PATH'."
     Write-Host "Python is the only thing you need to install by hand here."
     Write-Host "Once it is installed, this tool sets up everything else by itself."
     Write-Host ""
     Write-Host "Close this window, run this file again, and it will continue automatically."
-    throw "Python 3.10 or newer is required. Install it using the link above, then run this file again."
+    throw "Python 3.11 or newer is required. Install it using the link above, then run this file again."
 }
 
 function Invoke-Python {
@@ -793,14 +808,36 @@ function Register-PythonUserScripts {
 }
 
 function Test-DenoAvailable {
+    # "Available" means a Deno that current yt-dlp can actually use: its EJS
+    # challenge solver supports Deno 2.3.0+. An older Deno counts as unavailable
+    # so setup/repair upgrades it instead of trusting it and failing later.
     if ($script:DenoAvailable) {
         return $true
     }
     Refresh-Path
-    if (Get-Command deno -ErrorAction SilentlyContinue) {
-        $script:DenoAvailable = $true
-        return $true
+    $deno = Get-Command deno -ErrorAction SilentlyContinue
+    if (-not $deno) {
+        return $false
     }
+
+    $versionLine = ""
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $versionLine = (& $deno.Source --version 2>$null | Select-Object -First 1)
+    } catch {} finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($versionLine -match 'deno (\d+)\.(\d+)\.(\d+)') {
+        $script:DenoVersionText = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+        if ([version]$script:DenoVersionText -ge [version]"2.3.0") {
+            $script:DenoAvailable = $true
+            return $true
+        }
+    }
+
+    $script:DenoTooOld = $true
     return $false
 }
 
@@ -815,30 +852,40 @@ function Get-RemoteComponentArgs {
 }
 
 function Install-Deno {
+    # Emits ONLY its Boolean result to the output stream: winget/installer text
+    # goes through Out-Host so a caller's `if (Install-Deno)` can never be fooled
+    # by stray output lines (the bug class that hit the download updater once).
     if (Test-DenoAvailable) {
         return $true
+    }
+
+    if ($script:DenoTooOld) {
+        Write-Host "Deno was found but is older than 2.3.0, which current yt-dlp needs. Updating it..."
     }
 
     # Prefer winget on a normal machine (keeps the documented uninstall path).
     if (Resolve-WingetPath) {
         Write-Host "Setting up Deno..."
         try {
-            Invoke-Winget -Arguments @("install", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements")
+            if ($script:DenoTooOld) {
+                Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+            }
+            Invoke-Winget -Arguments @("install", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
         } catch {}
         if (Test-DenoAvailable) {
             return $true
         }
     }
 
-    # No winget (or it did not expose deno): use the official Deno installer,
-    # which drops deno into %USERPROFILE%\.deno and updates the user PATH.
-    Write-Host "Setting up Deno (a small runtime yt-dlp can use for some protected videos)..."
+    # No winget (or it did not expose a usable deno): use the official Deno
+    # installer, which drops deno into %USERPROFILE%\.deno and updates the user PATH.
+    Write-Host "Setting up Deno (the JavaScript runtime yt-dlp needs for full YouTube support)..."
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         $env:DENO_INSTALL = Join-Path $env:USERPROFILE ".deno"
         $installer = Invoke-RestMethod -Uri "https://deno.land/install.ps1"
-        Invoke-Expression $installer
+        Invoke-Expression $installer | Out-Host
     } catch {
         Write-Host "Could not set up Deno automatically: $($_.Exception.Message)"
         return $false
@@ -893,18 +940,23 @@ function Ensure-DownloadPipeline {
     # itself, and it is what bootstraps the rest (yt-dlp, FFmpeg, mutagen) through pip.
     Ensure-PythonCommand
     Ensure-Command -Command "yt-dlp" -Name "yt-dlp" -WingetId "yt-dlp.yt-dlp" -ManualUrl "https://github.com/yt-dlp/yt-dlp/releases/latest" -PipInstall {
-        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default]", "curl-cffi")
+        Invoke-Python -Arguments @("-m", "pip", "install", "--user", "--upgrade", "yt-dlp[default,curl-cffi]")
     }
     Ensure-Command -Command "ffmpeg" -Name "FFmpeg" -WingetId "Gyan.FFmpeg" -ManualUrl "https://www.gyan.dev/ffmpeg/builds/" -ManualTip "Download a static build, extract it, and add its bin folder to PATH." -PipInstall {
         Install-FfmpegViaPip
     }
-    # Deno is optional: check it so its status shows during setup, but never block
-    # on it. yt-dlp uses it only for some videos; the download step installs it on
-    # demand, and a Deno-less run is the normal fallback.
+    # Deno is a normal YouTube dependency now: current yt-dlp needs a supported
+    # JavaScript runtime (Deno 2.3.0+) for full YouTube support, so set it up
+    # during startup like the rest. Still never hard-block on it: if setup fails,
+    # downloads are attempted anyway and may work for some videos.
     if (Test-DenoAvailable) {
         Write-Step "Deno found."
     } else {
-        Write-Mascot "(._.)" "Deno is not set up yet. It is only needed for some videos and will be added automatically if a download needs it."
+        if (Install-Deno) {
+            Write-Step "Deno installed."
+        } else {
+            Write-Mascot "(u_u)" "Deno could not be set up. Downloads will still be tried, but some videos may fail without it." -Color "yellow"
+        }
     }
 
     $script:DownloadPipelineReady = $true
@@ -924,6 +976,57 @@ function Ensure-AacPipeline {
     $script:AacPipelineReady = $true
 }
 
+function Get-YtDlpVersionInfo {
+    # Snapshot of the yt-dlp this window would actually run: path, version, and a
+    # channel guess (nightly builds carry a 4-part version like 2026.08.18.122307).
+    # Used to verify that a repair really changed something before promising a
+    # "fixed" retry, and to print honest diagnostics on final failure.
+    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+    if (-not $ytDlpCommand -or -not $ytDlpCommand.Source) {
+        return $null
+    }
+
+    $version = ""
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $version = [string](& $ytDlpCommand.Source --ignore-config --version 2>$null | Select-Object -First 1)
+    } catch {} finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    # Both the nightly AND master channels use 4-part timestamp versions, so a
+    # 4-part build can only honestly be called "development" from the version
+    # string alone. Never build channel-specific control flow on this label.
+    $channel = if ($version -match '^\d+\.\d+\.\d+\.\d+') { "development" } elseif ($version) { "stable" } else { "unknown" }
+
+    # "$version" (not a [string] cast): casting $null to [string] in an
+    # expression stays $null in Windows PowerShell, and .Trim() would throw
+    # when yt-dlp produces no version output at all.
+    return [pscustomobject]@{
+        Path = $ytDlpCommand.Source
+        Version = "$version".Trim()
+        Channel = $channel
+    }
+}
+
+function Write-YtDlpUpdateOutcome {
+    # Honest post-repair report: say what actually changed instead of assuming the
+    # update worked. A retry after "unchanged" is still worthwhile (YouTube
+    # failures are often intermittent), but it must not be sold as a fixed build.
+    param($Before, $After)
+
+    if ($After -and $After.Version) {
+        if (-not $Before -or -not $Before.Version) {
+            Write-Host "yt-dlp is now $($After.Version) ($($After.Channel))."
+        } elseif ($Before.Version -ne $After.Version -or $Before.Path -ne $After.Path) {
+            Write-Host "yt-dlp updated: $($Before.Version) ($($Before.Channel)) -> $($After.Version) ($($After.Channel))."
+        } else {
+            Write-Host "yt-dlp is unchanged ($($After.Version), $($After.Channel)). Retrying anyway in case the failure was temporary."
+        }
+    }
+}
+
 function Update-PipInstalledYtDlp {
     # Update a pip-installed yt-dlp using the interpreter that OWNS the exe this
     # window actually runs. 'py -3' can resolve to a different Python than the one
@@ -936,26 +1039,29 @@ function Update-PipInstalledYtDlp {
     if (-not $ytDlpCommand -or -not $ytDlpCommand.Source) {
         return $false
     }
-    if ($ytDlpCommand.Source -notmatch '(?i)\\Scripts\\yt-dlp(?:\.exe)?$') {
+    if ($ytDlpCommand.Source -notmatch '(?i)\\Scripts\\yt-dlp(?:\.\w+)?$') {
         return $false
     }
 
     $installHome = Split-Path -Parent (Split-Path -Parent $ytDlpCommand.Source)
     $channelNote = if ($Nightly) { " (nightly pre-release)" } else { "" }
+    # The curl-cffi extra lets yt-dlp's own package metadata pick the curl-cffi
+    # version it supports, instead of pip independently grabbing the newest.
     $pipTail = @()
     if ($Nightly) {
         $pipTail += "--pre"
     }
-    $pipTail += @("yt-dlp[default]", "curl-cffi")
+    $pipTail += "yt-dlp[default,curl-cffi]"
 
     try {
         # Per-interpreter install, e.g. C:\...\Python311\Scripts: python.exe sits
-        # one folder up from Scripts. Update in place, no --user.
+        # one folder up from Scripts. Update in place, no --user. True only when
+        # pip itself exited 0 - "the command was invoked" is not "it worked".
         $ownerPython = Join-Path $installHome "python.exe"
         if (Test-Path -LiteralPath $ownerPython) {
             Write-Host "Detected pip-installed yt-dlp. Updating it$channelNote with its own Python..."
             & $ownerPython -m pip install --upgrade @pipTail | Out-Host
-            return $true
+            return ($LASTEXITCODE -eq 0)
         }
 
         # pip --user install, e.g. %APPDATA%\Python\Python312\Scripts: no
@@ -964,15 +1070,14 @@ function Update-PipInstalledYtDlp {
             $pyVersionArg = "-$($Matches.major).$($Matches.minor)"
             Write-Host "Detected pip-installed yt-dlp (user install). Updating it$channelNote with Python $($Matches.major).$($Matches.minor)..."
             & py $pyVersionArg -m pip install --user --upgrade @pipTail | Out-Host
-            if ($LASTEXITCODE -eq 0) {
-                return $true
-            }
+            return ($LASTEXITCODE -eq 0)
         }
 
-        # Unrecognized layout: fall back to whatever Python this window found.
-        Write-Host "Detected pip-installed yt-dlp. Updating it$channelNote..."
-        Invoke-Python -Arguments (@("-m", "pip", "install", "--user", "--upgrade") + $pipTail) | Out-Host
-        return $true
+        # Unrecognized layout: ownership cannot be proved, so do NOT guess-update
+        # whatever Python this window happens to resolve - mutating an unrelated
+        # interpreter is exactly the multi-Python bug this function exists to fix.
+        Write-Host "Found a pip-installed yt-dlp in an unrecognized layout; skipping the pip update for it."
+        return $false
     } catch {
         return $false
     }
@@ -980,6 +1085,16 @@ function Update-PipInstalledYtDlp {
 
 function Update-DownloadTools {
     param([string]$FailureText = "")
+
+    # One stable repair pass per album: metadata recovery and the audio download
+    # share this flag so the same winget/pip churn is not re-run back to back
+    # within a single link.
+    if ($script:StableRepairAttempted) {
+        Write-Host "yt-dlp failed again. A download-tool repair was already attempted for this link; retrying without another update pass..."
+        Refresh-Path
+        return
+    }
+    $script:StableRepairAttempted = $true
 
     if (Resolve-WingetPath) {
         if ($FailureText -match 'no such option') {
@@ -991,50 +1106,95 @@ function Update-DownloadTools {
         Write-Host "yt-dlp failed. Checking the download tools, then trying once more..."
     }
 
-    # Deno is optional and installed on demand: if a download failed and Deno is
-    # missing, set it up so the retry can use yt-dlp's ejs challenge solver.
+    $before = Get-YtDlpVersionInfo
+
+    # A missing or too-old Deno is a likely cause of YouTube failures now: make
+    # sure the retry has a supported JS runtime for yt-dlp's ejs challenge solver.
     if (-not (Test-DenoAvailable)) {
         Install-Deno | Out-Null
     }
 
+    # Update only the yt-dlp installation that is actually active: a machine with
+    # several yt-dlp copies must not have an unrelated one mutated in a repair
+    # pass, or the retry cannot know which build it is testing. Ownership is
+    # classified from the active path - "not pip" does NOT imply winget-managed;
+    # a manually downloaded exe updates itself instead.
     # Out-Host keeps winget/pip text visible but out of this function's output
     # stream. Callers consume that stream as their return value, and a stray line
     # here turned a failed download into a reported success.
+    $activeIsPip = $before -and $before.Path -match '(?i)\\Scripts\\yt-dlp(?:\.\w+)?$'
+    $activeIsWinget = $before -and $before.Path -match '(?i)\\WinGet\\'
     if (Resolve-WingetPath) {
-        Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+        if ($activeIsWinget -or -not $before) {
+            Invoke-Winget -Arguments @("upgrade", "--id", "yt-dlp.yt-dlp", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+        }
         Invoke-Winget -Arguments @("upgrade", "--id", "DenoLand.Deno", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
+        # The Deno upgrade may have changed the version; drop the cached probe so
+        # later checks and diagnostics re-query the real state.
+        $script:DenoAvailable = $false
+        $script:DenoVersionText = ""
         Invoke-Winget -Arguments @("upgrade", "--id", "Gyan.FFmpeg", "-e", "--accept-package-agreements", "--accept-source-agreements") | Out-Host
     }
 
-    [void](Update-PipInstalledYtDlp)
+    if ($activeIsPip) {
+        [void](Update-PipInstalledYtDlp)
+    } elseif ($before -and -not $activeIsWinget) {
+        # Manually downloaded official exe: it can update itself on its current
+        # channel. A pip launcher refuses this politely, so misclassification is
+        # harmless.
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $before.Path --ignore-config -U 2>&1 | Out-Host
+        } catch {} finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
 
     Refresh-Path
+    Write-YtDlpUpdateOutcome -Before $before -After (Get-YtDlpVersionInfo)
 }
 
 function Update-DownloadToolsNightly {
     # Last resort after the stable update still fails: YouTube sometimes breaks
     # every stable yt-dlp release at once and for days only the nightly build
     # carries the fix (e.g. the Aug 2026 "HTTP Error 403: Forbidden" breakage).
-    Write-Host "The newest stable yt-dlp still fails. Trying yt-dlp's nightly build, which gets YouTube fixes first..."
-
-    if (Update-PipInstalledYtDlp -Nightly) {
+    # yt-dlp itself recommends nightly to regular users for exactly this reason.
+    if ($script:NightlyEscalationAttempted) {
+        Write-Host "Nightly escalation was already attempted for this link. Retrying once more..."
         Refresh-Path
         return
     }
+    $script:NightlyEscalationAttempted = $true
 
-    # Standalone exe (winget or manual download): the official binary can switch
-    # itself to the nightly channel. Harmless if this build cannot self-update.
-    $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
-    if ($ytDlpCommand) {
-        $previousErrorActionPreference = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            & $ytDlpCommand.Source --update-to nightly 2>&1 | Out-Host
-        } catch {} finally {
-            $ErrorActionPreference = $previousErrorActionPreference
+    # Do not claim "the newest stable still fails" - that state was never
+    # measured (the failing build may be old, or already nightly). Report only
+    # what is known: the current build fails and nightly is being checked.
+    Write-Host "The current yt-dlp build still fails. Checking yt-dlp's nightly build, which gets YouTube fixes first..."
+
+    $before = Get-YtDlpVersionInfo
+
+    $pipUpdated = Update-PipInstalledYtDlp -Nightly
+    if (-not $pipUpdated) {
+        # Standalone exe (winget or manual download): the official binary can
+        # switch itself to the nightly channel. A pip install refuses politely.
+        $ytDlpCommand = Get-Command yt-dlp -ErrorAction SilentlyContinue
+        if ($ytDlpCommand) {
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & $ytDlpCommand.Source --ignore-config --update-to nightly 2>&1 | Out-Host
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "Could not switch yt-dlp to the nightly build."
+                }
+            } catch {} finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
         }
     }
+
     Refresh-Path
+    Write-YtDlpUpdateOutcome -Before $before -After (Get-YtDlpVersionInfo)
 }
 
 function Repair-StaleAacWorkFiles {
@@ -1356,22 +1516,20 @@ audio.save()
 function Write-YtDlpFailureIfNonRetryable {
     param([Parameter(Mandatory = $true)][string]$Text)
 
-    if ($Text -match 'is not a valid URL|Unsupported URL|Invalid URL') {
-        Write-Host ""
-        Write-Mascot "(o_o?)" "That does not look like a valid YouTube video link." -Color "yellow"
-        Write-Host "Copy the full link from YouTube and try again."
-        return $true
-    }
-
-    if ($Text -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies from browser') {
-        Write-Host ""
-        Write-Mascot "(o_o?)" "YouTube is asking this machine to sign in or confirm it is not a bot." -Color "yellow"
-        Write-Host "Updating the tools will not fix that."
-        Write-Host "Try again later, or try from a different network/browser session."
-        return $true
-    }
-
-    if ($Text -match 'Incomplete YouTube ID|Video unavailable|This video is unavailable|This video isn.?t available|This video has been removed|Private video|Video not available|Video not found|HTTP Error 404|HTTP Error 410') {
+    # Only SEMANTIC terminal states stop recovery - messages where YouTube itself
+    # says what happened to the video. Everything else goes through the bounded
+    # recovery ladder on purpose:
+    # - Sign-in/bot-check and generic "Video unavailable" symptoms: upstream has
+    #   shipped extractor/JS-runtime breakages that presented exactly this way
+    #   and were fixed by updating; auth guidance is shown only after recovery
+    #   still fails.
+    # - Raw HTTP 404/410: transport-layer statuses from inside the media pipeline
+    #   have occurred on browser-playable videos and do not establish that the
+    #   video is gone.
+    # - "Unsupported/invalid URL": the app validates and normalizes every link to
+    #   a canonical watch URL before yt-dlp sees it, so this appearing at all
+    #   would be a tool problem, which recovery may fix.
+    if ($Text -match 'Incomplete YouTube ID|This video has been removed|Private video') {
         Write-Host ""
         Write-Mascot "(o_o?)" "YouTube could not find or play that video." -Color "yellow"
         Write-Host "Updating the tools will not fix a missing, private, deleted, or incomplete video link."
@@ -1390,7 +1548,7 @@ function Write-YtDlpFinalFailure {
     param([object[]]$Output)
 
     Write-Host ""
-    Write-Mascot "(x_x)" "Still couldn't download after updating the tools." -Color "red"
+    Write-Mascot "(x_x)" "Still couldn't download after the repair attempts." -Color "red"
 
     $errorLines = @(@($Output) | Where-Object { $_ -match '(?i)^\s*ERROR' } | Select-Object -Last 4)
     if (-not $errorLines) {
@@ -1401,12 +1559,59 @@ function Write-YtDlpFinalFailure {
         $errorLines | ForEach-Object { Write-Host ("  " + $_) }
     }
 
+    # Auth/bot symptoms were allowed through recovery in case a tool update could
+    # fix an extractor breakage that merely looked like a sign-in wall. It could
+    # not, so now point at the likely real causes.
+    $joinedOutput = @($Output) -join "`n"
+    if ($joinedOutput -match 'Sign in to confirm|not a bot|LOGIN_REQUIRED|confirm you.?re not a bot|cookies') {
+        Write-Host ""
+        Write-Mascot "(o_o?)" "YouTube appears to be asking this machine to sign in or pass a bot check." -Color "yellow"
+        Write-Host "Since updating did not help, try again later, or from a different network/browser session."
+    }
+
     Write-Host ""
     Write-Host "Common causes:"
     Write-Host "- The link is private, age-restricted, deleted, or region-locked."
-    Write-Host "- The link is a playlist/channel instead of one video."
+    Write-Host "- YouTube may be requiring sign-in, region access, or an extractor update."
     Write-Host "- The internet connection is blocked or unstable."
     Write-Host "- YouTube changed something and yt-dlp needs another update later."
+    Write-Host ""
+
+    # Environment block: "yt-dlp is updated" alone proved insufficient to debug
+    # the multi-Python outage remotely. Which executable, version, and channel
+    # actually ran is what a screenshot needs to carry. All lines best-effort.
+    Write-Host "If you report this problem, include these lines:"
+    Write-Host "  App:    YouTube Album Splitter v$($script:AppVersion)"
+    $ytInfo = Get-YtDlpVersionInfo
+    if ($ytInfo) {
+        Write-Host "  yt-dlp: $($ytInfo.Version) ($($ytInfo.Channel)) at $($ytInfo.Path)"
+    } else {
+        Write-Host "  yt-dlp: not found on PATH"
+    }
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($script:PythonCommand) {
+            $pythonVersion = [string](& $script:PythonCommand.Command @($script:PythonCommand.Args + @("--version")) 2>$null | Select-Object -First 1)
+            # Report the interpreter the launcher actually selects (sys.executable),
+            # not the py.exe launcher path - multi-Python ambiguity is exactly what
+            # these diagnostics exist to expose.
+            $pythonExe = "" + (Invoke-Python -Arguments @("-c", "import sys; print(sys.executable)") 2>$null | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace($pythonExe)) {
+                $pythonExe = $script:PythonCommand.Command
+            }
+            if ($pythonVersion) { Write-Host "  Python: $("$pythonVersion".Trim()) at $($pythonExe.Trim())" }
+        }
+        if ($script:DenoVersionText) {
+            Write-Host "  Deno:   $script:DenoVersionText"
+        } else {
+            Write-Host "  Deno:   not found"
+        }
+        $ffmpegLine = [string](& ffmpeg -version 2>$null | Select-Object -First 1)
+        if ($ffmpegLine -match 'ffmpeg version (\S+)') { Write-Host "  FFmpeg: $($Matches[1])" }
+    } catch {} finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     Write-Host ""
     Write-Host "Double-check the link and try again."
     Write-Host ""
@@ -1958,6 +2163,9 @@ function Get-YtDlpMetadata {
     param([Parameter(Mandatory = $true)][string]$Url)
 
     $metadataArgs = @(
+        # Isolate from any user/system yt-dlp config file: inherited proxies,
+        # cookies, archives, or exec hooks would silently change this pipeline.
+        "--ignore-config",
         "--skip-download",
         "--dump-single-json",
         "--no-warnings",
@@ -1986,6 +2194,8 @@ function Invoke-YtDlpDownloadFullAudio {
     )
 
     $baseArgs = @(
+        # Isolate from any user/system yt-dlp config file (see metadata args).
+        "--ignore-config",
         "--force-overwrites",
         "--no-playlist",
         "--newline",
@@ -2038,7 +2248,7 @@ function Invoke-YtDlpDownloadFullAudio {
     $nightlyArgs += Get-RemoteComponentArgs
     $nightlyArgs += $baseArgs
 
-    $nightlyResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $nightlyArgs -Message "Trying once more with nightly yt-dlp" -TrackCount $TrackCount
+    $nightlyResult = Invoke-YtDlpDownloadProcess -YtDlpArgs $nightlyArgs -Message "Trying once more after nightly escalation" -TrackCount $TrackCount
     if ($nightlyResult.ExitCode -eq 0) {
         return $true
     }
@@ -2212,8 +2422,10 @@ function Invoke-KnownTrackSplit {
         [Parameter(Mandatory = $true)][string]$SourceName
     )
 
+    # Exclude the known full-length file by identity: a source title that starts
+    # with "1. " must not make its own download count as an existing split song.
     $existingSongs = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '^\d+\. ' }
+        Where-Object { $_.Name -match '^\d+\. ' -and $_.FullName -ne $FullOpusPath }
 
     if ($existingSongs) {
         return $false
@@ -2678,7 +2890,7 @@ function Show-AlbumCelebration {
 $script:AnsiEnabled = Enable-AnsiOutput
 
 Write-Host ""
-Write-Host "YouTube Album Splitter"
+Write-Host "YouTube Album Splitter v$($script:AppVersion)"
 Write-Host ""
 
 $script:DownloadPipelineReady = $false
@@ -2735,10 +2947,19 @@ while ($true) {
     }
     $Url = $ResolvedUrl.NormalizedUrl
 
+    # One repair pass of each kind per album: metadata recovery and the audio
+    # download share these flags so the same tool updates are not re-run back to
+    # back for a single link. A new link starts fresh.
+    $script:StableRepairAttempted = $false
+    $script:NightlyEscalationAttempted = $false
+
     Ensure-DownloadPipeline
 
     try {
-        $OutDir = Join-Path $DownloadsRoot (Get-Date -Format "yyyy-MM-dd HH-mm-ss")
+        # Short GUID suffix: two instances starting a link in the same second must
+        # not share a working folder, especially since folder contents now serve
+        # as the download postcondition.
+        $OutDir = Join-Path $DownloadsRoot ((Get-Date -Format "yyyy-MM-dd HH-mm-ss") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
         New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
         Write-Host ""
@@ -2773,6 +2994,19 @@ while ($true) {
         Write-Host ""
 
         $DownloadSucceeded = Invoke-YtDlpDownloadFullAudio -Url $Url -OutDir $OutDir -TrackCount $TrackList.Count
+        if ($DownloadSucceeded) {
+            # yt-dlp exiting 0 is not the promise made to the user; a non-empty
+            # full-length Opus in the output folder is. Verify the artifact before
+            # declaring success, so "success with no file" can never happen again
+            # regardless of what causes it.
+            $downloadedOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Length -gt 0 } |
+                Select-Object -First 1
+            if (-not $downloadedOpus) {
+                $DownloadSucceeded = $false
+                Write-Mascot "(o_o?)" "The downloader reported success, but no audio file was created. Treating this as a failed download." -Color "yellow"
+            }
+        }
         if (-not $DownloadSucceeded) {
             if ((Test-Path -LiteralPath $OutDir) -and -not (Get-ChildItem -LiteralPath $OutDir -Force -ErrorAction SilentlyContinue)) {
                 Remove-Item -LiteralPath $OutDir -Force
@@ -2790,10 +3024,11 @@ while ($true) {
             $script:PendingCelebration = $script:AlbumsThisSession
         }
 
-        $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-        Where-Object { $_.Name -notmatch '^\d+\. ' } |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
+        # Keep the identity established by the artifact check above instead of
+        # re-deriving the full-length file from its filename: a video whose title
+        # itself starts with "1. " would otherwise be misread as an already-split
+        # song, never get split, and be mistagged as track 1.
+        $FullOpus = $downloadedOpus
 
     $AlbumArtist = ""
     $AlbumTitle = ""
@@ -2816,9 +3051,9 @@ while ($true) {
 
         Move-Item -LiteralPath $OutDir -Destination $AlbumDir
         $OutDir = $AlbumDir
+        # Re-resolve the same file by its (unchanged) name in the moved folder.
         $FullOpus = Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-            Where-Object { $_.Name -notmatch '^\d+\. ' } |
-            Sort-Object LastWriteTime -Descending |
+            Where-Object { $_.Name -eq $downloadedOpus.Name } |
             Select-Object -First 1
     }
 
@@ -2848,7 +3083,7 @@ while ($true) {
     }
 
     $SongCount = (Get-ChildItem -LiteralPath $OutDir -Filter "*.opus" |
-        Where-Object { $_.Name -match '^\d+\. ' } |
+        Where-Object { $_.Name -match '^\d+\. ' -and (-not $FullOpus -or $_.Name -ne $FullOpus.Name) } |
         Measure-Object).Count
     $tagExitCode = $null
 
@@ -2889,6 +3124,9 @@ chapter_dir = Path(sys.argv[1])
 cover_path = Path(sys.argv[2])
 album_title = sys.argv[3] if len(sys.argv) > 3 else ""
 album_artist = sys.argv[4] if len(sys.argv) > 4 else ""
+# The full-length download's filename: skip it by identity. A source title that
+# starts with "1. " must not get the full album tagged/renamed as a song.
+full_opus_name = sys.argv[5] if len(sys.argv) > 5 else ""
 chapter_re = re.compile(r"^(?P<number>\d+)\.\s*(?P<title>.+)\.opus$", re.IGNORECASE)
 
 cover_tag = None
@@ -2901,6 +3139,8 @@ if cover_path.is_file():
     cover_tag = base64.b64encode(pic.write()).decode("ascii")
 
 for path in sorted(chapter_dir.glob("*.opus")):
+    if full_opus_name and path.name == full_opus_name:
+        continue
     match = chapter_re.match(path.name)
     if not match:
         continue
@@ -2938,7 +3178,8 @@ for path in sorted(chapter_dir.glob("*.opus")):
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $tagOutput = Invoke-Python -Arguments @($TagScript, $OutDir, $Cover, $AlbumTitle, $AlbumArtist) 2>&1
+            $FullOpusName = if ($FullOpus) { $FullOpus.Name } else { "" }
+            $tagOutput = Invoke-Python -Arguments @($TagScript, $OutDir, $Cover, $AlbumTitle, $AlbumArtist, $FullOpusName) 2>&1
             $tagExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -2956,7 +3197,8 @@ for path in sorted(chapter_dir.glob("*.opus")):
         }
     }
 
-    if (Test-Path -LiteralPath $Cover) {
+    $HadCover = Test-Path -LiteralPath $Cover
+    if ($HadCover) {
         Remove-Item -LiteralPath $Cover -Force
     }
 
@@ -2970,16 +3212,30 @@ for path in sorted(chapter_dir.glob("*.opus")):
         }
     }
 
+    # Completion messages derive from what actually happened: never claim album
+    # art that was not embedded, and never play the celebration after a failure.
     if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
-        Write-Step "Tagged $SongCount song(s) and embedded album art."
+        if ($HadCover) {
+            Write-Step "Tagged $SongCount song(s) and embedded album art."
+        } else {
+            Write-Step "Tagged $SongCount song(s). Album art could not be embedded."
+        }
     }
 
     Write-Host ""
-    Show-TableFlip
-    Write-Host ("Files are in: " + (Get-PathHyperlink -Path $OutDir))
-    if ($SongCount -gt 0) {
-        Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
+    if ($SongCount -gt 0 -and $tagExitCode -ne 0) {
+        Write-Mascot "(u_u)" "Finished, but tag cleanup failed above. The split songs and the full-length Opus were both kept." -Color "yellow"
     } else {
+        Show-TableFlip
+    }
+    Write-Host ("Files are in: " + (Get-PathHyperlink -Path $OutDir))
+    if ($SongCount -gt 0 -and $tagExitCode -eq 0) {
+        if ($HadCover) {
+            Write-Host "Each song is named like '1. Song Name.opus', has album art, has tracknumber set to the number, and has no genre tag."
+        } else {
+            Write-Host "Each song is named like '1. Song Name.opus' and has tracknumber set to the number, but shows no cover art."
+        }
+    } elseif ($SongCount -eq 0) {
         Write-Mascot "(._.)" "This video did not create separate songs, so the full audio file was kept."
     }
     Write-Host ""
